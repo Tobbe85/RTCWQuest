@@ -64,11 +64,7 @@ static SLObjectItf outputMixObject = NULL;
 // buffer queue player interfaces
 static SLObjectItf bqPlayerObject = NULL;
 static SLPlayItf bqPlayerPlay;
-#ifdef ANDROID_NDK
 static SLAndroidSimpleBufferQueueItf bqPlayerBufferQueue;
-#else
-static SLBufferQueueItf bqPlayerBufferQueue;
-#endif
 
 static SLEffectSendItf bqPlayerEffectSend;
 static SLMuteSoloItf bqPlayerMuteSolo;
@@ -102,6 +98,9 @@ static unsigned char play_buffer[OPENSL_BUFF_LEN];
 void bqPause(int p)
 {
 	int result;
+	if (bqPlayerPlay == NULL) {
+		return;
+	}
 	if (p)
 	{
 		result = (*bqPlayerPlay)->SetPlayState(bqPlayerPlay, SL_PLAYSTATE_PAUSED);
@@ -112,8 +111,10 @@ void bqPause(int p)
 		result = (*bqPlayerPlay)->SetPlayState(bqPlayerPlay, SL_PLAYSTATE_PLAYING);
 		myassert(SL_RESULT_SUCCESS == result,"SetPlayState");
 
-		result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, "\0", 1);
-		myassert(SL_RESULT_SUCCESS == result,"Enqueue first buffer");
+		if (bqPlayerBufferQueue != NULL) {
+			result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, "\0", 1);
+			myassert(SL_RESULT_SUCCESS == result,"Enqueue first buffer");
+		}
 	}
 }
 
@@ -167,8 +168,10 @@ void bqPlayerCallback(SLAndroidSimpleBufferQueueItf bq, void *context)
 	//LOGI("Frame count = %d",FrameCount);
 	if (FrameCount == 0)
 		FrameCount = 1;
-	result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, play_buffer,FrameCount * factor);
-	myassert(SL_RESULT_SUCCESS == result,"Enqueue failed");
+	if (snd_inited && bqPlayerBufferQueue != NULL) {
+		result = (*bqPlayerBufferQueue)->Enqueue(bqPlayerBufferQueue, play_buffer,FrameCount * factor);
+		myassert(SL_RESULT_SUCCESS == result,"Enqueue failed");
+	}
 
 	// TEST pthread_mutex_unlock(&dma_mutex);
 }
@@ -251,7 +254,7 @@ qboolean SNDDMA_Init( void ) {
 	myassert(SL_RESULT_SUCCESS == result,"GetInterface AudioPlayer");
 
 	// get the buffer queue interface
-	result = (*bqPlayerObject)->GetInterface(bqPlayerObject, SL_IID_BUFFERQUEUE,
+	result = (*bqPlayerObject)->GetInterface(bqPlayerObject, SL_IID_ANDROIDSIMPLEBUFFERQUEUE,
 			&bqPlayerBufferQueue);
 	myassert(SL_RESULT_SUCCESS == result,"GetInterface buffer queue");
 
@@ -291,14 +294,36 @@ int SNDDMA_GetDMAPos( void ) {
 
 void SNDDMA_Shutdown( void ) {
 	LOGI("shutdown Sound");
-	bqPause(1);
-	(*bqPlayerObject)->Destroy(bqPlayerObject);
-	(*outputMixObject)->Destroy(outputMixObject);
-	(*engineObject)->Destroy(engineObject);
+	snd_inited = 0;
+
+	if (bqPlayerPlay != NULL) {
+		(*bqPlayerPlay)->SetPlayState(bqPlayerPlay, SL_PLAYSTATE_STOPPED);
+	}
+	if (bqPlayerBufferQueue != NULL) {
+		(*bqPlayerBufferQueue)->Clear(bqPlayerBufferQueue);
+		(*bqPlayerBufferQueue)->RegisterCallback(bqPlayerBufferQueue, NULL, NULL);
+	}
+	if (bqPlayerObject != NULL) {
+		(*bqPlayerObject)->Destroy(bqPlayerObject);
+	}
+	if (outputMixObject != NULL) {
+		(*outputMixObject)->Destroy(outputMixObject);
+	}
+	if (engineObject != NULL) {
+		(*engineObject)->Destroy(engineObject);
+	}
 
 	bqPlayerObject = NULL;
+	bqPlayerPlay = NULL;
+	bqPlayerBufferQueue = NULL;
 	outputMixObject = NULL;
 	engineObject = NULL;
+	engineEngine = NULL;
+
+	free(dma.buffer);
+	dma.buffer = NULL;
+	dmasize = 0;
+	dmapos = 0;
 }
 
 /*

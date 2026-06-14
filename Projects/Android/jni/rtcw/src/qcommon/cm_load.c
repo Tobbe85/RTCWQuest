@@ -650,13 +650,13 @@ void CM_LoadMap( const char *name, qboolean clientload, int *checksum ) {
 		Com_Error( ERR_DROP, "Couldn't load %s", name );
 	}
 
-	last_checksum = LittleLong( Com_BlockChecksum( buf, length ) );
-	*checksum = last_checksum;
-
 	header = *(dheader_t *)buf;
 	for ( i = 0 ; i < sizeof( dheader_t ) / 4 ; i++ ) {
 		( (int *)&header )[i] = LittleLong( ( (int *)&header )[i] );
 	}
+
+	last_checksum = LittleLong( Com_BlockChecksum( buf, length ) );
+	*checksum = last_checksum;
 
 #ifndef _SKIP_BSP_CHECK
 	if ( header.version != BSP_VERSION ) {

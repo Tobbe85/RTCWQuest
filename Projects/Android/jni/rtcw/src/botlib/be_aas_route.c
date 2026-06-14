@@ -1044,6 +1044,12 @@ int AAS_ReadRouteCache( void ) {
 	routecacheheader_t routecacheheader;
 	aas_routingcache_t *cache;
 
+#ifdef __ANDROID__
+	Com_sprintf( filename, MAX_QPATH, "maps/%s.rcd", ( *aasworld ).mapname );
+	botimport.Print( PRT_WARNING, "Android: ignoring route cache %s; serialized routing caches contain native pointers\n", filename );
+	return qfalse;
+#endif
+
 	Com_sprintf( filename, MAX_QPATH, "maps/%s.rcd", ( *aasworld ).mapname );
 	botimport.FS_FOpenFile( filename, &fp, FS_READ );
 	if ( !fp ) {
@@ -1190,7 +1196,11 @@ void AAS_InitRouting( void ) {
 		AAS_CreateAllRoutingCache();
 		( *aasworld ).initialized = qfalse;
 
+#ifndef __ANDROID__
 		AAS_WriteRouteCache();  // save it so we don't have to create it again
+#else
+		botimport.Print( PRT_WARNING, "Android: route cache generated in memory only; not writing pointer-based cache file\n" );
+#endif
 	}
 	// done.
 } //end of the function AAS_InitRouting
@@ -2030,7 +2040,7 @@ void AAS_DecompressVis( byte *in, int numareas, byte *decompressed ) {
 
 	//row = (numareas+7)>>3;
 	out = decompressed;
-	end = ( byte * )( (int)decompressed + numareas );
+	end = decompressed + numareas;
 
 	do
 	{

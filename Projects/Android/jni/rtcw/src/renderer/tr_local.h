@@ -557,6 +557,7 @@ typedef struct {
 	cplane_t portalPlane;           // clip anything behind this if mirroring
 	int viewportX, viewportY, viewportWidth, viewportHeight;
 	float fovX, fovY;
+	stereoFrame_t stereoFrame;
 	float projectionMatrix[16];
 	cplane_t frustum[4];
 	vec3_t visBounds[2];
@@ -1238,6 +1239,8 @@ void  R_NoiseInit( void );
 void R_SwapBuffers( int );
 
 void R_RenderView( viewParms_t *parms );
+void R_SetupProjection( void );
+void R_SetupFrustum( void );
 
 void R_AddMD3Surfaces( trRefEntity_t *e );
 void R_AddNullModelSurfaces( trRefEntity_t *e );
@@ -1647,6 +1650,9 @@ RENDERER BACK END FUNCTIONS
 
 void RB_RenderThread( void );
 void RB_ExecuteRenderCommands( const void *data );
+qboolean RE_VR_BeginStereoReplayCapture( void );
+void RE_VR_CancelStereoReplayCapture( void );
+qboolean RE_VR_ReplayStereoFrame( stereoFrame_t stereoFrame, qboolean finalReplay );
 
 /*
 =============================================================

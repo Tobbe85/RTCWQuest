@@ -1063,6 +1063,8 @@ Sets cg.refdef view values
 static int CG_CalcViewValues( void ) {
 	playerState_t   *ps;
 	static vec3_t oldOrigin = {0,0,0};
+	static qboolean wasCameraMode = qfalse;
+	static vec3_t cameraHmdBaseAngles = {0,0,0};
 
 	memset( &cg.refdef, 0, sizeof( cg.refdef ) );
 
@@ -1081,10 +1083,26 @@ static int CG_CalcViewValues( void ) {
 		float x;
 
 		if ( trap_getCameraInfo( CAM_PRIMARY, cg.time, &origin, &angles, &fov ) ) {
+			if ( cgVR ) {
+				cgVR->cin_camera = qtrue;
+				cg.refdef.rdflags |= RDF_VR_CINEMATIC;
+				if ( !wasCameraMode ) {
+					VectorCopy( cgVR->hmdorientation, cameraHmdBaseAngles );
+				}
+			}
+			wasCameraMode = qtrue;
+
 			VectorCopy( origin, cg.refdef.vieworg );
 			angles[ROLL] = 0;
 			angles[PITCH] = -angles[PITCH];     // (SA) compensate for reversed pitch (this makes the game match the editor, however I'm guessing the real fix is to be done there)
 			VectorCopy( angles, cg.refdefViewAngles );
+
+			if ( cgVR && !cgVR->screen ) {
+				cg.refdefViewAngles[PITCH] = cgVR->hmdorientation[PITCH];
+				cg.refdefViewAngles[YAW] += AngleSubtract( cgVR->hmdorientation[YAW], cameraHmdBaseAngles[YAW] );
+				cg.refdefViewAngles[ROLL] = cgVR->hmdorientation[ROLL];
+			}
+
 			AnglesToAxis( cg.refdefViewAngles, cg.refdef.viewaxis );
 
 			x = cg.refdef.width / tan( fov / 360 * M_PI );
@@ -1103,6 +1121,10 @@ static int CG_CalcViewValues( void ) {
 			return 0;
 
 		} else {
+			wasCameraMode = qfalse;
+			if ( cgVR ) {
+				cgVR->cin_camera = qfalse;
+			}
 			cg.cameraMode = qfalse;                 // camera off in cgame
 			trap_Cvar_Set( "cg_letterbox", "0" );
 			trap_SendClientCommand( "stopCamera" );    // camera off in game
@@ -1110,6 +1132,12 @@ static int CG_CalcViewValues( void ) {
 
 			CG_Fade( 0, 0, 0, 255, 0, 0 );                // go black
 			CG_Fade( 0, 0, 0, 0, cg.time + 200, 1500 );   // then fadeup
+		}
+	}
+	else {
+		wasCameraMode = qfalse;
+		if ( cgVR ) {
+			cgVR->cin_camera = qfalse;
 		}
 	}
 
@@ -1190,6 +1218,19 @@ static int CG_CalcViewValues( void ) {
 	}
 
 	// position eye reletive to origin
+	if ( cgVR && !cgVR->screen && !cg.renderingThirdPerson ) {
+		float lateHmdYaw = cgVR->clientview_hmd_yaw_valid ?
+			AngleSubtract( cgVR->hmdorientation[YAW], cgVR->clientview_hmd_yaw ) : 0.0f;
+		// Gameplay/usercmd pitch still follows the ioEF delta_angles path. For
+		// rendering, use the live headset pitch/roll so RTCW's bob/zoom/camera
+		// pitch offsets do not fight the HMD pose.
+		cg.refdefViewAngles[PITCH] = cgVR->hmdorientation[PITCH];
+		cg.refdefViewAngles[ROLL] = cgVR->hmdorientation[ROLL];
+		cg.refdefViewAngles[YAW] = cgVR->clientviewangles[YAW]
+			+ lateHmdYaw
+			+ SHORT2ANGLE( cg.snap->ps.delta_angles[YAW] );
+	}
+
 	AnglesToAxis( cg.refdefViewAngles, cg.refdef.viewaxis );
 
 	if ( cg.hyperspace ) {
@@ -1609,7 +1650,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 	if (cgVR->wheelSelectorEnabled) {
 		CG_DrawWheelSelector();
-	} else if (!cgVR->screen){
+	} else if (!cgVR->screen && !cgVR->cin_camera){
 		CG_AddViewWeapon( &cg.predictedPlayerState );
 		if (!cg.renderingThirdPerson && (cgVR->backpackitemactive == 3 || cgVR->binocularsActive || (!cgVR->dualwielding && !cgVR->weapon_stabilised))) {
 			CG_AddViewHand( &cg.predictedPlayerState);

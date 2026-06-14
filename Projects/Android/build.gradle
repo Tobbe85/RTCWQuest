@@ -1,70 +1,178 @@
+buildscript {
+    repositories {
+        google()
+        mavenCentral()
+    }
+
+    dependencies {
+        classpath 'com.android.tools.build:gradle:8.2.1'
+    }
+}
+
 apply plugin: 'com.android.application'
-apply from: "${rootProject.projectDir}/VrApp.gradle"
 
 android {
-  // This is the name of the generated apk file, which will have
-  // -debug.apk or -release.apk appended to it.
-  // The filename doesn't effect the Android installation process.
-  // Use only letters to remain compatible with the package name.
-  project.archivesBaseName = "rtcwquest"
+    namespace = "com.drbeef.rtcwquest"
 
-  defaultConfig {
-    // Gradle replaces the manifest package with this value, which must
-    // be unique on a system.  If you don't change it, a new app
-    // will replace an older one.
-    applicationId "com.drbeef." + project.archivesBaseName
+    project.archivesBaseName = "rtcwquest"
 
-    // override app plugin abiFilters for both 32 and 64-bit support
+    defaultConfig {
+        applicationId "com.drbeef." + project.archivesBaseName
+        minSdkVersion 29
+        targetSdkVersion 32
+
+        externalNativeBuild {
+            ndk {
+                abiFilters 'arm64-v8a'
+            }
+            ndkBuild {
+                def numProcs = Runtime.runtime.availableProcessors()
+                arguments "V=0", "-j$numProcs", "-C$project.buildDir.parent",
+                        "APP_PLATFORM=android-29", "NDK_TOOLCHAIN_VERSION=clang",
+                        "APP_STL=c++_shared"
+                abiFilters 'arm64-v8a'
+            }
+        }
+    }
+
     externalNativeBuild {
-        ndk {
-                abiFilters 'armeabi-v7a'
-        }
         ndkBuild {
-                abiFilters 'armeabi-v7a'
+            path file('jni/Android.mk')
         }
     }
-      minSdkVersion 26
-      targetSdkVersion 26
-  }
 
-  sourceSets {
-    main {
-      manifest.srcFile 'AndroidManifest.xml'
-      java.srcDirs = ['../../java']
-      jniLibs.srcDir 'libs'
-      res.srcDirs = ['../../res']
-      assets.srcDirs = ['../../assets']
+    signingConfigs {
+        def keystorePath = (project.hasProperty('key.store')) ?
+                new File(project.getProperty('key.store')) :
+                project.file('android.debug.keystore')
+
+        def keystorePassword = (project.hasProperty('key.store.password')) ?
+                project.getProperty('key.store.password') : 'android'
+
+        def keystoreKeyAlias = (project.hasProperty('key.alias')) ?
+                project.getProperty('key.alias') : 'androiddebugkey'
+
+        def keystoreKeyPassword = (project.hasProperty('key.alias.password')) ?
+                project.getProperty('key.alias.password') : 'android'
+
+        debug {
+            storeFile keystorePath
+            storePassword keystorePassword
+            keyAlias keystoreKeyAlias
+            keyPassword keystoreKeyPassword
+            v2SigningEnabled true
+        }
+
+        release {
+            storeFile keystorePath
+            storePassword keystorePassword
+            keyAlias keystoreKeyAlias
+            keyPassword keystoreKeyPassword
+            v2SigningEnabled true
+        }
     }
-  }
+
+    buildTypes {
+        debug {
+            signingConfig signingConfigs.debug
+            debuggable true
+            jniDebuggable true
+            externalNativeBuild {
+                ndkBuild {
+                    arguments "NDK_DEBUG=1", "USE_ASAN=1"
+                }
+            }
+        }
+
+        release {
+            signingConfig signingConfigs.release
+            debuggable false
+            jniDebuggable false
+            externalNativeBuild {
+                ndkBuild {
+                    arguments "NDK_DEBUG=0", "USE_ASAN=0"
+                }
+            }
+        }
+    }
+
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['../../java']
+            jniLibs.srcDir 'libs'
+            jniLibs.srcDir "$buildDir/generated/openxr-loader/jniLibs"
+            res.srcDirs = ['../../res']
+            assets.srcDirs = ['../../assets']
+        }
+    }
+
     compileOptions {
         sourceCompatibility = '1.8'
         targetCompatibility = '1.8'
     }
-    compileSdkVersion = 26
-    buildToolsVersion = '29.0.1'
-}
 
-dependencies {
-    implementation "com.android.support:support-compat:26.1.0"
-    implementation "com.android.support:support-core-utils:26.1.0"
-    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+    lint {
+        checkReleaseBuilds false
+        disable 'ExpiredTargetSdkVersion'
+    }
+
+    packagingOptions {
+        jniLibs {
+            useLegacyPackaging = true
+        }
+    }
+
+    compileSdkVersion = 32
+    ndkVersion '25.1.8937393'
 }
 
 repositories {
     google()
+    mavenCentral()
 }
-buildscript {
-    repositories {
-        google()
+
+configurations {
+    openxrLoaderAar
+}
+
+dependencies {
+    implementation "com.android.support:support-compat:28.0.0"
+    implementation "com.android.support:support-core-utils:28.0.0"
+    implementation "org.khronos.openxr:openxr_loader_for_android:1.1.60"
+    openxrLoaderAar "org.khronos.openxr:openxr_loader_for_android:1.1.60@aar"
+    implementation fileTree(dir: 'libs', include: ['*.jar', '*.aar'])
+}
+
+tasks.register("extractOpenXrLoader", Copy) {
+    from({ zipTree(configurations.openxrLoaderAar.singleFile) }) {
+        include "prefab/modules/openxr_loader/libs/android.arm64-v8a/libopenxr_loader.so"
+        eachFile { fileCopyDetails ->
+            fileCopyDetails.path = "arm64-v8a/libopenxr_loader.so"
+        }
+        includeEmptyDirs = false
     }
+    into "$buildDir/generated/openxr-loader/jniLibs"
+}
+
+tasks.named("preBuild").configure {
+    dependsOn("extractOpenXrLoader")
 }
 
 task packResources(type: Zip) {
     from "./z_vr_assets/"
-    destinationDir file("../../assets/")
-    archiveName "z_vr_assets.pk3"
+    destinationDirectory = file("../../assets/")
+    archiveFileName = "z_vr_assets.pk3"
 }
 
-tasks.matching {it.name.startsWith("assemble")}.all { Task task ->
+tasks.matching { it.name.startsWith("assemble") }.configureEach { Task task ->
     task.dependsOn(packResources)
+}
+
+tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach { Task task ->
+    task.dependsOn(packResources)
+}
+
+if (!tasks.findByName("prepareKotlinBuildScriptModel")) {
+    tasks.register("prepareKotlinBuildScriptModel") {}
 }

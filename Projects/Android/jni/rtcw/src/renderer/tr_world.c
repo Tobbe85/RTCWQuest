@@ -420,7 +420,7 @@ static void R_RecursiveWorldNode( mnode_t *node, int planeBits, int dlightBits )
 		// if the bounding volume is outside the frustum, nothing
 		// inside can be visible OPTIMIZE: don't do this all the way to leafs?
 
-		if ( !r_nocull->integer ) {
+		if ( !r_nocull->integer && !( tr.refdef.rdflags & RDF_VR_CINEMATIC ) ) {
 			int r;
 
 			if ( planeBits & 1 ) {

@@ -413,9 +413,17 @@ int AAS_LoadAASFile( char *filename ) {
 	  //
 	( *aasworld ).bspchecksum = atoi( LibVarGetString( "sv_mapChecksum" ) );
 	if ( LittleLong( header.bspchecksum ) != ( *aasworld ).bspchecksum ) {
+#ifdef __ANDROID__
+		botimport.Print( PRT_WARNING, "AAS checksum mismatch for %s: file=%d sv_mapChecksum=%d\n",
+						  filename, LittleLong( header.bspchecksum ), ( *aasworld ).bspchecksum );
+		botimport.Print( PRT_WARNING, "Android: accepting %s despite AAS checksum mismatch\n", filename );
+#else
+		botimport.Print( PRT_ERROR, "AAS checksum mismatch for %s: file=%d sv_mapChecksum=%d\n",
+						  filename, LittleLong( header.bspchecksum ), ( *aasworld ).bspchecksum );
 		AAS_Error( "aas file %s is out of date\n", filename );
 		botimport.FS_FCloseFile( fp );
 		return BLERR_WRONGAASFILEVERSION;
+#endif
 	} //end if
 	  //load the lumps:
 	  //bounding boxes
@@ -534,6 +542,10 @@ int AAS_LoadAASFile( char *filename ) {
 	AAS_SwapAASData();
 	//aas file is loaded
 	( *aasworld ).loaded = qtrue;
+	botimport.Print( PRT_MESSAGE,
+					  "AAS loaded %s: areas=%d nodes=%d reachability=%d clusters=%d\n",
+					  filename, ( *aasworld ).numareas, ( *aasworld ).numnodes,
+					  ( *aasworld ).reachabilitysize, ( *aasworld ).numclusters );
 	//close the file
 	botimport.FS_FCloseFile( fp );
 	//

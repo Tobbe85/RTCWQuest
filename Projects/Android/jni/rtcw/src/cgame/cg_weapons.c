@@ -2882,19 +2882,18 @@ static qboolean CG_CalcMuzzlePoint( int entityNum, int dist, vec3_t muzzle ) {
     centity_t   *cent;
     int anim;
     cent = &cg_entities[entityNum];
-    if ( entityNum == cg.snap->ps.clientNum ) {
+    if ( cg.snap && entityNum == cg.snap->ps.clientNum && cgVR && !cgVR->screen && !cgVR->cin_camera && !cg.cameraMode ) {
         vec3_t angles;
-        int weapon = cent->currentState.weapon;
+        int weapon = cg.predictedPlayerState.weapon;
+        qboolean akimbo = qfalse;
+
         if (weapon == WP_AKIMBO || weapon == WP_AKIMBO_MP40 || weapon == WP_AKIMBO_THOMPSON) {
             if (BG_AkimboFireSequence(weapon, cg.snap->ps.ammoclip[weapon], cg.snap->ps.ammoclip[weapAlts[weapon]], cgVR->akimboTriggerState)) {
-                CG_CalculateVROffHandWeaponPosition(muzzle, angles);    
-            } else {
-                CG_CalculateVRWeaponPosition(weapon, muzzle, angles);    
+                akimbo = qtrue;
             }
-        } else {
-            CG_CalculateVRWeaponPosition(cent->currentState.weapon, muzzle, angles);
         }
 
+        CG_CalculateWeaponPositionAndScale( &cg.predictedPlayerState, muzzle, angles, akimbo );
         AngleVectors( angles, forward, NULL, NULL );
         VectorMA( muzzle, dist, forward, muzzle );
         return qtrue;
@@ -3605,6 +3604,10 @@ void CG_AddViewWeapon( playerState_t *ps ) {
 	}
 
 	if ( ps->pm_type == PM_INTERMISSION ) {
+		return;
+	}
+
+	if ( cg.cameraMode || ( cgVR && cgVR->cin_camera ) ) {
 		return;
 	}
 
@@ -7397,6 +7400,10 @@ void CG_SpawnTracer( int sourceEnt, vec3_t pstart, vec3_t pend ) {
 	VectorCopy( pstart, start );
 	VectorCopy( pend, end );
 
+	if ( cgVR && cg.snap && sourceEnt == cg.snap->ps.clientNum ) {
+		CG_CalcMuzzlePoint( sourceEnt, 0, start );
+	}
+
 	VectorSubtract( end, start, dir );
 	dist = VectorNormalize( dir );
 
@@ -7404,7 +7411,7 @@ void CG_SpawnTracer( int sourceEnt, vec3_t pstart, vec3_t pend ) {
 		return; // segment isnt long enough, dont bother
 
 	}
-	if ( sourceEnt < cgs.maxclients ) {
+	if ( sourceEnt < cgs.maxclients && !( cgVR && cg.snap && sourceEnt == cg.snap->ps.clientNum ) ) {
 		// for visual purposes, find the actual tag_weapon for this client
 		// and offset the start and end accordingly
 		if ( cg_entities[sourceEnt].currentState.eFlags & EF_MG42_ACTIVE ) {   // mounted

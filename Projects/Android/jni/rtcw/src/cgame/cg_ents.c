@@ -2619,6 +2619,9 @@ void CG_AddPacketEntities( void ) {
 	centity_t           *cent;
 	playerState_t       *ps;
 	int clcount;
+	int playerEntities;
+	int generalEntities;
+	static int lastEntityProbeTime;
 
 	// set cg.frameInterpolation
 	if ( cg.nextSnap ) {
@@ -2667,12 +2670,48 @@ void CG_AddPacketEntities( void ) {
 
 
 	// RF, count the number of players in the scene, so we can force low LOD's for dead bodies
-	for ( num = 0, clcount = 0 ; num < cg.snap->numEntities ; num++ ) {
+	for ( num = 0, clcount = 0, playerEntities = 0, generalEntities = 0 ; num < cg.snap->numEntities ; num++ ) {
 		cent = &cg_entities[ cg.snap->entities[ num ].number ];
 		cent->pe.forceLOD = qfalse;
 		if ( cent->currentState.number < MAX_CLIENTS ) {
 			clcount++;
 		}
+		if ( cent->currentState.eType == ET_PLAYER ) {
+			playerEntities++;
+		} else if ( cent->currentState.eType == ET_GENERAL ) {
+			generalEntities++;
+		}
+	}
+
+	if ( cg.time - lastEntityProbeTime > 1000 ) {
+		int snapPlayerEntities = 0;
+		int snapGeneralEntities = 0;
+		int snapTypes[ET_EVENTS + 1];
+		char firstEntities[192];
+
+		memset( snapTypes, 0, sizeof( snapTypes ) );
+		firstEntities[0] = '\0';
+		for ( num = 0 ; num < cg.snap->numEntities ; num++ ) {
+			entityState_t *state = &cg.snap->entities[num];
+			if ( state->eType >= 0 && state->eType <= ET_EVENTS ) {
+				snapTypes[state->eType]++;
+			}
+			if ( state->eType == ET_PLAYER ) {
+				snapPlayerEntities++;
+			} else if ( state->eType == ET_GENERAL ) {
+				snapGeneralEntities++;
+			}
+			if ( num < 8 ) {
+				Q_strcat( firstEntities, sizeof( firstEntities ),
+						  va( "%s%d:%d", num ? " " : "", state->number, state->eType ) );
+			}
+		}
+		CG_Printf( "VR entity probe: snap=%d centPlayers=%d centGenerals=%d snapPlayers=%d snapGenerals=%d clientCount=%d types[0..8]=%d,%d,%d,%d,%d,%d,%d,%d,%d first=%s\n",
+				   cg.snap->numEntities, playerEntities, generalEntities,
+				   snapPlayerEntities, snapGeneralEntities, clcount,
+				   snapTypes[0], snapTypes[1], snapTypes[2], snapTypes[3], snapTypes[4],
+				   snapTypes[5], snapTypes[6], snapTypes[7], snapTypes[8], firstEntities );
+		lastEntityProbeTime = cg.time;
 	}
 
 	// NON TAG-CONNECTED ENTITIES

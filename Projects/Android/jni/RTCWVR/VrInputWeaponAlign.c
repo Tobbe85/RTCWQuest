@@ -7,11 +7,6 @@ Authors		:	Simon Brown
 
 *************************************************************************************/
 
-#include <VrApi.h>
-#include <VrApi_Helpers.h>
-#include <VrApi_SystemUtils.h>
-#include <VrApi_Input.h>
-#include <VrApi_Types.h>
 #include <android/keycodes.h>
 
 #include "VrInput.h"
@@ -55,9 +50,6 @@ void HandleInput_WeaponAlign( ovrInputStateTrackedRemote *pDominantTrackedRemote
 
         VectorSubtract(vr.weaponangles_last, vr.weaponangles, vr.weaponangles_delta);
         VectorCopy(vr.weaponangles, vr.weaponangles_last);
-
-        ALOGV("        weaponangles_last: %f, %f, %f",
-              vr.weaponangles_last[0], vr.weaponangles_last[1], vr.weaponangles_last[2]);
 
     }
 

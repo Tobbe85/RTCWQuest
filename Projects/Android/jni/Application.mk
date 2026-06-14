@@ -4,7 +4,7 @@
 ROOT_DIR := $(dir $(lastword $(MAKEFILE_LIST)))../../../../..
 NDK_MODULE_PATH := $(ROOT_DIR)
 
-APP_PLATFORM := android-19
+APP_PLATFORM := android-29
 
 APP_CFLAGS += -Wl,--no-undefined
 
@@ -16,7 +16,8 @@ GL4ES_PATH		:= $(SUPPORT_LIBS)/gl4es
 
 APP_ALLOW_MISSING_DEPS=true
 
-APP_MODULES := gl4es qagamearm uiarm cgamearm rtcw_client
+APP_ABI := arm64-v8a
+APP_MODULES := gl4es qagame ui cgame rtcw_client
 APP_STL := c++_shared
 
 

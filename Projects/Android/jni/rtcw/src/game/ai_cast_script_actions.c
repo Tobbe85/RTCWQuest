@@ -2669,6 +2669,11 @@ qboolean ScriptStartCam( cast_state_t *cs, char *params, qboolean black ) {
 		G_Error( "G_ScriptAction_Cam: filename parameter required\n" );
 	}
 
+	if ( trap_Cvar_VariableIntegerValue( "vr_skipCinematics" ) ) {
+		G_Printf( "VR skip cinematics: ignoring AI startcam %s black=%d\n", token, (int)black );
+		return qtrue;
+	}
+
 	// turn off noclient flag
 	ent->r.svFlags &= ~SVF_NOCLIENT;
 

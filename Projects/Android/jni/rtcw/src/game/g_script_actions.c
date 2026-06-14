@@ -1078,6 +1078,11 @@ qboolean G_ScriptAction_StartCam( gentity_t *ent, char *params ) {
 		G_Error( "G_ScriptAction_Cam: filename parameter required\n" );
 	}
 
+	if ( trap_Cvar_VariableIntegerValue( "vr_skipCinematics" ) ) {
+		G_Printf( "VR skip cinematics: ignoring script startcam %s\n", token );
+		return qtrue;
+	}
+
 	// turn off noclient flag
 	ent->r.svFlags &= ~SVF_NOCLIENT;
 

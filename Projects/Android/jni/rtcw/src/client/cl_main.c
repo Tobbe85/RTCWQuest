@@ -31,6 +31,11 @@ If you have questions concerning this license or the applicable additional terms
 #include "client.h"
 #include <limits.h>
 
+#ifdef __ANDROID__
+extern qboolean RTCWVR_PreRendererInit( void );
+extern void RTCWVR_InitOnce( void );
+#endif
+
 cvar_t  *cl_nodelta;
 cvar_t  *cl_debugMove;
 
@@ -669,7 +674,9 @@ void CL_MapLoading( void ) {
 		memset( clc.serverMessage, 0, sizeof( clc.serverMessage ) );
 		memset( &cl.gameState, 0, sizeof( cl.gameState ) );
 		clc.lastPacketSentTime = -9999;
+#ifndef __ANDROID__
 		SCR_UpdateScreen();
+#endif
 	} else {
 		// clear nextmap so the cinematic shutdown doesn't execute it
 		Cvar_Set( "nextmap", "" );
@@ -677,7 +684,9 @@ void CL_MapLoading( void ) {
 		Q_strncpyz( cls.servername, "localhost", sizeof( cls.servername ) );
 		cls.state = CA_CHALLENGING;     // so the connect screen is drawn
 		cls.keyCatchers = 0;
+#ifndef __ANDROID__
 		SCR_UpdateScreen();
+#endif
 		clc.connectTime = -RETRANSMIT_TIMEOUT;
 		NET_StringToAdr( cls.servername, &clc.serverAddress );
 		// we don't need a challenge on the localhost
@@ -1784,6 +1793,16 @@ void CL_ConnectionlessPacket( netadr_t from, msg_t *msg ) {
 	// server connection
 	if ( !Q_stricmp( c, "connectResponse" ) ) {
 		if ( cls.state >= CA_CONNECTED ) {
+#ifdef __ANDROID__
+			if ( from.type == NA_LOOPBACK && !Q_stricmp( cls.servername, "localhost" ) &&
+				 clc.netchan.remoteAddress.type != NA_LOOPBACK ) {
+				Com_Printf( "Android: accepting localhost connectResponse for uninitialized netchan\n" );
+				Netchan_Setup( NS_CLIENT, &clc.netchan, from, Cvar_VariableValue( "net_qport" ) );
+				cls.state = CA_CONNECTED;
+				clc.lastPacketSentTime = -9999;
+				return;
+			}
+#endif
 			Com_Printf( "Dup connect received.  Ignored.\n" );
 			return;
 		}
@@ -1887,7 +1906,23 @@ void CL_PacketEvent( netadr_t from, msg_t *msg ) {
 	//
 	// packet from server
 	//
+#ifdef __ANDROID__
+	if ( from.type == NA_LOOPBACK && !Q_stricmp( cls.servername, "localhost" ) &&
+		 cls.state >= CA_CONNECTED && clc.netchan.remoteAddress.type != NA_LOOPBACK ) {
+		Com_Printf( "Android: restoring localhost netchan address before sequenced packet\n" );
+		Netchan_Setup( NS_CLIENT, &clc.netchan, from, Cvar_VariableValue( "net_qport" ) );
+	}
+#endif
+
 	if ( !NET_CompareAdr( from, clc.netchan.remoteAddress ) ) {
+#ifdef __ANDROID__
+		static int androidPacketRejects;
+		if ( androidPacketRejects < 16 ) {
+			Com_Printf( "Android: rejecting sequenced packet from type %i, netchan type %i, state %i, server '%s'\n",
+						from.type, clc.netchan.remoteAddress.type, cls.state, cls.servername );
+			androidPacketRejects++;
+		}
+#endif
 		Com_DPrintf( "%s:sequenced packet without connection\n"
 					 ,NET_AdrToString( from ) );
 		// FIXME: send a client disconnect?
@@ -2275,8 +2310,16 @@ CL_InitRenderer
 ============
 */
 void CL_InitRenderer( void ) {
+#ifdef __ANDROID__
+	RTCWVR_PreRendererInit();
+#endif
+
 	// this sets up the renderer and calls R_Init
 	re.BeginRegistration( &cls.glconfig );
+
+#ifdef __ANDROID__
+	RTCWVR_InitOnce();
+#endif
 
 	// load character sets
 	cls.charSetShader = re.RegisterShader( "gfx/2d/bigchars" );

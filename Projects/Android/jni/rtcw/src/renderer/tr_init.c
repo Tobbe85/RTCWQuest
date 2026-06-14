@@ -1111,6 +1111,7 @@ void R_Register( void ) {
 	r_swapInterval = ri.Cvar_Get( "r_swapInterval", "0", CVAR_ARCHIVE );
 	r_gamma = ri.Cvar_Get( "r_gamma", "1.1", CVAR_ARCHIVE );
 	r_facePlaneCull = ri.Cvar_Get( "r_facePlaneCull", "1", CVAR_ARCHIVE );
+	ri.Cvar_Set( "r_facePlaneCull", "1" );
 
 	r_railWidth = ri.Cvar_Get( "r_railWidth", "16", CVAR_ARCHIVE );
 	r_railCoreWidth = ri.Cvar_Get( "r_railCoreWidth", "0.25", CVAR_ARCHIVE );
@@ -1175,7 +1176,9 @@ void R_Register( void ) {
 	r_drawentities = ri.Cvar_Get( "r_drawentities", "1", CVAR_CHEAT );
 	r_ignore = ri.Cvar_Get( "r_ignore", "1", CVAR_CHEAT );
 	r_nocull = ri.Cvar_Get( "r_nocull", "0", CVAR_CHEAT );
+	ri.Cvar_Set( "r_nocull", "0" );
 	r_novis = ri.Cvar_Get( "r_novis", "0", CVAR_CHEAT );
+	ri.Cvar_Set( "r_novis", "0" );
 	r_showcluster = ri.Cvar_Get( "r_showcluster", "0", CVAR_CHEAT );
 	r_speeds = ri.Cvar_Get( "r_speeds", "0", CVAR_CHEAT );
 	r_verbose = ri.Cvar_Get( "r_verbose", "0", CVAR_CHEAT );
@@ -1438,6 +1441,9 @@ refexport_t *GetRefAPI( int apiVersion, refimport_t *rimp ) {
 	re.BeginFrame       = RE_BeginFrame;
 	re.EndFrame         = RE_EndFrame;
 	re.SubmitStereoFrame= RE_SubmitStereoFrame;
+	re.VR_BeginStereoReplayCapture = RE_VR_BeginStereoReplayCapture;
+	re.VR_CancelStereoReplayCapture = RE_VR_CancelStereoReplayCapture;
+	re.VR_ReplayStereoFrame = RE_VR_ReplayStereoFrame;
 
 	re.MarkFragments    = R_MarkFragments;
 	re.LerpTag          = R_LerpTag;

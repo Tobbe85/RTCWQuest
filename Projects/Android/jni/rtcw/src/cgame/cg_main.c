@@ -58,21 +58,21 @@ This must be the very first function compiled into the .q3vm file
 #if defined( __MACOS__ ) // TTimo: guarding
 #pragma export on
 #endif
-int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11  ) {
+intptr_t vmMain( int command, intptr_t arg0, intptr_t arg1, intptr_t arg2, intptr_t arg3, intptr_t arg4, intptr_t arg5, intptr_t arg6, intptr_t arg7, intptr_t arg8, intptr_t arg9, intptr_t arg10, intptr_t arg11  ) {
 #if defined( __MACOS__ )
 #pragma export off
 #endif
 	switch ( command ) {
 	case CG_GET_TAG:
-		return CG_GetTag( arg0, (char *)arg1, (orientation_t *)arg2 );
+		return CG_GetTag( (int)arg0, (char *)arg1, (orientation_t *)arg2 );
 	case CG_DRAW_ACTIVE_FRAME:
-		CG_DrawActiveFrame( arg0, arg1, arg2 );
+		CG_DrawActiveFrame( (int)arg0, (int)arg1, (int)arg2 );
 		return 0;
 	case CG_EVENT_HANDLING:
-		CG_EventHandling( arg0 );
+		CG_EventHandling( (int)arg0 );
 		return 0;
 	case CG_INIT:
-		CG_Init( arg0, arg1 );
+		CG_Init( (int)arg0, (int)arg1 );
 		return 0;
 	case CG_SHUTDOWN:
 		CG_Shutdown();
@@ -84,12 +84,12 @@ int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int a
 	case CG_LAST_ATTACKER:
 		return CG_LastAttacker();
 	case CG_KEY_EVENT:
-		CG_KeyEvent( arg0, arg1 );
+		CG_KeyEvent( (int)arg0, (int)arg1 );
 		return 0;
 	case CG_MOUSE_EVENT:
 		cgDC.cursorx = cgs.cursorX;
 		cgDC.cursory = cgs.cursorY;
-		CG_MouseEvent( arg0, arg1 );
+		CG_MouseEvent( (int)arg0, (int)arg1 );
 		return 0;
 	case CG_SET_VR_CLIENT_INFO:
 		cgVR = (vr_client_info_t*)arg0;
@@ -130,6 +130,9 @@ vmCvar_t cg_drawCrosshair;
 vmCvar_t cg_drawCrosshairNames;
 vmCvar_t cg_drawCrosshairPickups;
 vmCvar_t cg_hudAlpha;
+vmCvar_t cg_hudScale;
+vmCvar_t cg_hudDepth;
+vmCvar_t cg_hudYOffset;
 vmCvar_t cg_weaponCycleDelay;       //----(SA)	added
 vmCvar_t cg_cycleAllWeaps;
 vmCvar_t cg_useWeapsForZoom;
@@ -345,6 +348,9 @@ cvarTable_t cvarTable[] = {
 	{ &cg_drawCrosshairPickups, "cg_drawCrosshairPickups", "1", CVAR_ARCHIVE },
 	{ &cg_drawRewards, "cg_drawRewards", "1", CVAR_ARCHIVE },
 	{ &cg_hudAlpha, "cg_hudAlpha", "0.8", CVAR_ARCHIVE },
+	{ &cg_hudScale, "cg_hudScale", "0.5", CVAR_ARCHIVE },
+	{ &cg_hudDepth, "cg_hudDepth", "2.0", CVAR_ARCHIVE },
+	{ &cg_hudYOffset, "cg_hudYOffset", "0", CVAR_ARCHIVE },
 	{ &cg_useWeapsForZoom,  "cg_useWeapsForZoom", "2", CVAR_ARCHIVE },
 	{ &cg_weaponCycleDelay, "cg_weaponCycleDelay", "150", CVAR_ARCHIVE }, //----(SA)	added
 	{ &cg_cycleAllWeaps,    "cg_cycleAllWeaps", "1", CVAR_ARCHIVE },
@@ -1995,6 +2001,13 @@ void CG_LoadMenus( const char *menuFile ) {
 	fileHandle_t f;
 	static char buf[MAX_MENUDEFFILE];
 
+	if ( !menuFile || ( !strstr( menuFile, ".txt" ) && !strstr( menuFile, ".menu" ) ) ) {
+#ifdef __ANDROID__
+		CG_Printf( "Android: CG_LoadMenus forcing invalid HUD file '%s' to ui/hud.txt\n", menuFile ? menuFile : "<null>" );
+#endif
+		menuFile = "ui/hud.txt";
+	}
+
 	start = trap_Milliseconds();
 
 	len = trap_FS_FOpenFile( menuFile, &f, FS_READ );
@@ -2366,7 +2379,10 @@ void CG_LoadHudMenu() {
 
 	trap_Cvar_VariableStringBuffer( "cg_hudFiles", buff, sizeof( buff ) );
 	hudSet = buff;
-	if ( hudSet[0] == '\0' ) {
+	if ( hudSet[0] == '\0' || ( !strstr( hudSet, ".txt" ) && !strstr( hudSet, ".menu" ) ) ) {
+#ifdef __ANDROID__
+		CG_Printf( "Android: forcing cg_hudFiles from '%s' to ui/hud.txt\n", hudSet );
+#endif
 		hudSet = "ui/hud.txt";
 	}
 

@@ -102,6 +102,10 @@ typedef struct {
 
 	void ( *SubmitStereoFrame )( );
 
+	qboolean ( *VR_BeginStereoReplayCapture )( void );
+	void ( *VR_CancelStereoReplayCapture )( void );
+	qboolean ( *VR_ReplayStereoFrame )( stereoFrame_t stereoFrame, qboolean finalReplay );
+
 
 	int ( *MarkFragments )( int numPoints, const vec3_t *points, const vec3_t projection,
 							int maxPoints, vec3_t pointBuffer, int maxFragments, markFragment_t *fragmentBuffer );

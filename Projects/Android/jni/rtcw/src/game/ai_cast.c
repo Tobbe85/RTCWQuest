@@ -258,6 +258,11 @@ gentity_t *AICast_AddCastToGame( gentity_t *ent, char *castname, char *model, ch
 	bot->r.svFlags |= SVF_BOT;
 	bot->r.svFlags |= SVF_CASTAI;       // flag it for special Cast AI behaviour
 
+	G_Printf( "VR AI spawn allocate: name=%s classname=%s client=%d levelClients=%d maxClients=%d svFlags=0x%x origin=%.1f %.1f %.1f\n",
+			  castname ? castname : "<null>", ent->classname ? ent->classname : "<null>",
+			  clientNum, level.numPlayingClients, aicast_maxclients, bot->r.svFlags,
+			  ent->s.origin[0], ent->s.origin[1], ent->s.origin[2] );
+
 	// register the userinfo
 	trap_SetUserinfo( bot->s.number, userinfo );
 
@@ -265,6 +270,8 @@ gentity_t *AICast_AddCastToGame( gentity_t *ent, char *castname, char *model, ch
 //----(SA) ClientConnect requires a third 'isbot' parameter.  setting to qfalse and noting
 	ClientConnect( bot->s.number, qtrue, qfalse );
 //----(SA) end
+	bot->client->sess.sessionTeam = TEAM_FREE;
+	bot->client->sess.spectatorState = SPECTATOR_NOT;
 
 	// copy the origin/angles across
 	VectorCopy( ent->s.origin, bot->s.origin );
@@ -275,6 +282,13 @@ gentity_t *AICast_AddCastToGame( gentity_t *ent, char *castname, char *model, ch
 
 	// set up the ai
 	AICast_SetupClient( bot->s.number );
+
+	G_Printf( "VR AI spawn begin: client=%d inuse=%d clientPtr=%p connected=%d psClient=%d eType=%d linked=%d health=%d svFlags=0x%x origin=%.1f %.1f %.1f\n",
+			  bot->s.number, bot->inuse, bot->client,
+			  bot->client ? bot->client->pers.connected : -1,
+			  bot->client ? bot->client->ps.clientNum : -1,
+			  bot->s.eType, bot->r.linked, bot->health, bot->r.svFlags,
+			  bot->s.origin[0], bot->s.origin[1], bot->s.origin[2] );
 
 	return bot;
 }
@@ -349,6 +363,8 @@ gentity_t *AICast_CreateCharacter( gentity_t *ent, float *attributes, cast_weapo
 	int j;
 
 	if ( g_gametype.integer != GT_SINGLE_PLAYER ) { // no cast AI in multiplayer
+		G_Printf( "VR AI spawn skipped: classname=%s reason=gametype value=%d\n",
+				  ent->classname ? ent->classname : "<null>", g_gametype.integer );
 		return NULL;
 	}
 	// are bots enabled?
@@ -429,6 +445,8 @@ gentity_t *AICast_CreateCharacter( gentity_t *ent, float *attributes, cast_weapo
 	} else {
 		newent->health = client->ps.stats[STAT_HEALTH] = client->ps.stats[STAT_MAX_HEALTH] = cs->attributes[STARTING_HEALTH];
 	}
+	client->ps.pm_type = PM_NORMAL;
+	client->ps.pm_flags &= ~PMF_LIMBO;
 	//
 	cs->weaponInfo = weaponInfo;
 	//
@@ -449,6 +467,12 @@ gentity_t *AICast_CreateCharacter( gentity_t *ent, float *attributes, cast_weapo
 
 	// select a weapon
 	AICast_ChooseWeapon( cs, qfalse );
+	//
+	BG_PlayerStateToEntityState( &client->ps, &newent->s, qfalse );
+	VectorCopy( client->ps.origin, newent->r.currentOrigin );
+	if ( !newent->aiInactive ) {
+		trap_LinkEntity( newent );
+	}
 
 	//
 	// set the default function, overwrite if necessary
@@ -456,6 +480,10 @@ gentity_t *AICast_CreateCharacter( gentity_t *ent, float *attributes, cast_weapo
 	AIFunc_DefaultStart( cs );
 	//
 	numcast++;
+	G_Printf( "VR AI spawn ready: client=%d aiChar=%d numcast=%d eType=%d linked=%d health=%d psHealth=%d flags=0x%x svFlags=0x%x weapon=%d origin=%.1f %.1f %.1f\n",
+			  newent->s.number, cs->aiCharacter, numcast, newent->s.eType, newent->r.linked,
+			  newent->health, client->ps.stats[STAT_HEALTH], newent->flags, newent->r.svFlags,
+			  client->ps.weapon, newent->s.origin[0], newent->s.origin[1], newent->s.origin[2] );
 	//
 	return newent;
 }
@@ -498,7 +526,7 @@ void AICast_Init( void ) {
 	aicast_skillscale = (float)trap_Cvar_VariableIntegerValue( "g_gameSkill" ) / (float)GSKILL_MAX;
 
 	caststates = G_Alloc( aicast_maxclients * sizeof( cast_state_t ) );
-	memset( caststates, 0, sizeof( caststates ) );
+	memset( caststates, 0, aicast_maxclients * sizeof( cast_state_t ) );
 	for ( i = 0; i < MAX_CLIENTS; i++ ) {
 		caststates[i].entityNum = i;
 	}
@@ -815,6 +843,16 @@ void AICast_CheckLoadGame( void ) {
 			//ent->think = AICast_EnableRenderingThink;
 
 			saveGamePending = qfalse;
+
+			if ( trap_Cvar_VariableIntegerValue( "vr_skipCinematics" ) ) {
+				trap_Cvar_Set( "cg_norender", "0" );
+				trap_Cvar_Set( "g_reloading", "0" );
+				trap_SetConfigstring( CS_SCREENFADE, va( "0 %i 1", level.time ) );
+				level.reloadPauseTime = 0;
+				G_Printf( "VR skip cinematics: bypassing briefing/rockandroll startup\n" );
+				AICast_CastScriptThink();
+				return;
+			}
 
 			// wait for the clients to return from faded screen
 //			trap_SetConfigstring( CS_SCREENFADE, va("0 %i 1500", level.time + 500) );

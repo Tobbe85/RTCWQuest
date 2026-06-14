@@ -646,16 +646,16 @@ extern const char * getLibPath();
 
 #if defined( DO_LOADDLL_WRAP )
 void *Sys_LoadDll_Wrapped( const char *name,
-						   int( **entryPoint ) ( int, ... ),
-						   int ( *systemcalls )( int, ... ) )
+						   intptr_t( **entryPoint ) ( int, ... ),
+						   intptr_t ( *systemcalls )( intptr_t, ... ) )
 #else
 void *Sys_LoadDll( const char *name,
-				   int( **entryPoint ) ( int, ... ),
-				   int ( *systemcalls )( int, ... ) )
+				   intptr_t( **entryPoint ) ( int, ... ),
+				   intptr_t ( *systemcalls )( intptr_t, ... ) )
 #endif
 {
 	void *libHandle;
-	void ( *dllEntry )( int ( *syscallptr )( int, ... ) );
+	void ( *dllEntry )( intptr_t ( *syscallptr )( intptr_t, ... ) );
 	char fname[MAX_OSPATH];
 	char  *homepath;
 	char  *basepath;
@@ -675,9 +675,9 @@ void *Sys_LoadDll( const char *name,
 	snprintf( fname, sizeof( fname ), "%saxp.so", name );
 #elif defined ARM
 #ifdef PANDORA
-	snprintf( fname, sizeof( fname ), "../%sarm.so", name );
+	snprintf( fname, sizeof( fname ), "../%s.so", name );
 #else
-	snprintf( fname, sizeof( fname ), "%sarm.so", name );
+	snprintf( fname, sizeof( fname ), "%s.so", name );
 #endif
 #elif defined __mips__
 	snprintf( fname, sizeof( fname ), "%smips.so", name );
@@ -702,9 +702,9 @@ void *Sys_LoadDll( const char *name,
 	char *libdir = (char*)getenv("RTCW_GAMELIBDIR");
 
 #ifdef WOLF_SP_DEMO
-	snprintf( path, sizeof( path ), "%s/lib%sarm_d.so", getLibPath(), name );
+	snprintf( path, sizeof( path ), "%s/lib%s_d.so", getLibPath(), name );
 #else
-	snprintf( path, sizeof( path ), "%s/lib%sarm.so", libdir, name );
+	snprintf( path, sizeof( path ), "%s/lib%s.so", libdir, name );
 #endif
 
 	LOGI("Trying to load Android lib: %s",path);
@@ -814,8 +814,8 @@ void *Sys_LoadDll( const char *name,
 
 #if defined( DO_LOADDLL_WRAP )
 void *Sys_LoadDll( const char *name,
-				   int( **entryPoint ) ( int, ... ),
-				   int ( *systemcalls )( int, ... ) ) {
+				   intptr_t( **entryPoint ) ( int, ... ),
+				   intptr_t ( *systemcalls )( intptr_t, ... ) ) {
 	void *ret;
 	Cvar_Set( "cl_noprint", "1" );
 	ret = Sys_LoadDll_Wrapped( name, entryPoint, systemcalls );
@@ -1327,8 +1327,31 @@ void Sys_ParseArgs( int argc, char* argv[] ) {
 
 #include "../client/client.h"
 extern clientStatic_t cls;
-void RTCWVR_Init();
 qboolean shutdown;
+
+static qboolean RTCWVR_CommandLineHasCvar( const char *cmdline, const char *cvar ) {
+	char token[MAX_TOKEN_CHARS];
+	char *parsed;
+	char *p = (char *)cmdline;
+
+	while ( p && *p ) {
+		parsed = COM_ParseExt( &p, qtrue );
+		if ( !parsed || !parsed[0] ) {
+			break;
+		}
+		Q_strncpyz( token, parsed, sizeof( token ) );
+		if ( !Q_stricmp( token, "set" ) || !Q_stricmp( token, "seta" )
+			 || !Q_stricmp( token, "sets" ) || !Q_stricmp( token, "setu" ) ) {
+			parsed = COM_ParseExt( &p, qfalse );
+			if ( parsed[0] && !Q_stricmp( parsed, cvar ) ) {
+				return qtrue;
+			}
+		}
+	}
+
+	return qfalse;
+}
+
 int VR_main( int argc, char* argv[] ) {
 	// int  oldtime, newtime; // bk001204 - unused
 	int len, i;
@@ -1357,13 +1380,22 @@ int VR_main( int argc, char* argv[] ) {
 		strcat( cmdline, argv[i] );
 	}
 
+	if ( !RTCWVR_CommandLineHasCvar( cmdline, "fs_basepath" ) ) {
+		cmdline = realloc( cmdline, strlen( cmdline ) + strlen( " +set fs_basepath /sdcard/RTCWQuest" ) + 1 );
+		strcat( cmdline, " +set fs_basepath /sdcard/RTCWQuest" );
+	}
+	if ( !RTCWVR_CommandLineHasCvar( cmdline, "fs_homepath" ) ) {
+		cmdline = realloc( cmdline, strlen( cmdline ) + strlen( " +set fs_homepath /sdcard/RTCWQuest" ) + 1 );
+		strcat( cmdline, " +set fs_homepath /sdcard/RTCWQuest" );
+	}
+	__android_log_print( ANDROID_LOG_INFO, "RTCW", "Command line: %s", cmdline );
+
 	// bk000306 - clear queues
 	memset( &eventQue[0], 0, MAX_QUED_EVENTS * sizeof( sysEvent_t ) );
 	memset( &sys_packetReceived[0], 0, MAX_MSGLEN * sizeof( byte ) );
 
 	Com_Init( cmdline );
 	NET_Init();
-	RTCWVR_Init();
 
 	Sys_ConsoleInputInit();
 
@@ -1380,4 +1412,5 @@ int VR_main( int argc, char* argv[] ) {
 	}
 
 	CL_ShutdownUI();
+	return 0;
 }

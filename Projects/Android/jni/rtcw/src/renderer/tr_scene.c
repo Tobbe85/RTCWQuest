@@ -464,6 +464,8 @@ void RE_RenderScene( const refdef_t *fd ) {
 	tr.refdef.height = fd->height;
 	tr.refdef.fov_x = fd->fov_x;
 	tr.refdef.fov_y = fd->fov_y;
+	tr.refdef.stereoView = fd->stereoView;
+	tr.refdef.worldscale = fd->worldscale;
 
 	VectorCopy( fd->vieworg, tr.refdef.vieworg );
 	VectorCopy( fd->viewaxis[0], tr.refdef.viewaxis[0] );
@@ -513,6 +515,16 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	tr.refdef.num_entities = r_numentities - r_firstSceneEntity;
 	tr.refdef.entities = &backEndData[tr.smpFrame]->entities[r_firstSceneEntity];
+	{
+		static int lastEntityProbeTime;
+		int now = ri.Milliseconds();
+		if ( now - lastEntityProbeTime > 1000 ) {
+			ri.Printf( PRINT_ALL,
+					   "VR renderer entity probe: refEntities=%d totalEntities=%d stereo=%d rdflags=0x%x\n",
+					   tr.refdef.num_entities, r_numentities, tr.refdef.stereoView, tr.refdef.rdflags );
+			lastEntityProbeTime = now;
+		}
+	}
 
 	tr.refdef.num_dlights = r_numdlights - r_firstSceneDlight;
 	tr.refdef.dlights = &backEndData[tr.smpFrame]->dlights[r_firstSceneDlight];
@@ -554,50 +566,23 @@ void RE_RenderScene( const refdef_t *fd ) {
 
 	parms.fovX = tr.refdef.fov_x;
 	parms.fovY = tr.refdef.fov_y;
+	parms.stereoFrame = (stereoFrame_t)tr.refdef.stereoView;
 
 	VectorCopy( fd->vieworg, parms.or.origin );
+	VectorCopy( fd->viewaxis[0], parms.or.axis[0] );
+	VectorCopy( fd->viewaxis[1], parms.or.axis[1] );
+	VectorCopy( fd->viewaxis[2], parms.or.axis[2] );
 
-	//This is just madness, but it makes for smooth head tracking
-	static float yaw = 0;
-	static long long lastFrameIndex = 0;
-	long long frameIndex = RTCWVR_getFrameIndex();
-    if (RTCWVR_useScreenLayer())
-    {
-        //Resyncing with known game yaw, use game pitch/roll
-        yaw = fd->viewangles[YAW];
-        VectorCopy( fd->viewaxis[0], parms.or.axis[0] );
-        VectorCopy( fd->viewaxis[1], parms.or.axis[1] );
-        VectorCopy( fd->viewaxis[2], parms.or.axis[2] );
-        if (fd->stereoView == 1 && resyncClientYawWithGameYaw > 0) resyncClientYawWithGameYaw--;
-    }
-    else if (resyncClientYawWithGameYaw > 0 || vr.scopeengaged)
-    {
-        //Resyncing with known game yaw, but use HMD pitch/roll
-        vec3_t viewAngles;
-        VectorCopy(vr.hmdorientation, viewAngles);
-        viewAngles[YAW] = yaw = fd->viewangles[YAW];
-        AnglesToAxis( viewAngles, parms.or.axis );
-        if (fd->stereoView == 1 && resyncClientYawWithGameYaw > 0) resyncClientYawWithGameYaw--;
-    }
-	else
-	{
-		//Normal "in-game" behaviour, use pitch and roll from HMD but use
-		//a yaw that we believe is the same as the game server's yaw, adjusted by our last HMD movement
-		vec3_t viewAngles;
-        VectorCopy(vr.hmdorientation, viewAngles);
-
-        //Only update this for once per stereo pair
-        if (frameIndex != lastFrameIndex)
-        {
-			yaw -= vr.hmdorientation_delta[YAW];
-		}
-
-        viewAngles[YAW] = yaw;
-		AnglesToAxis(viewAngles, parms.or.axis);
-        lastFrameIndex = frameIndex;
+	if (!RTCWVR_useScreenLayer() &&
+		!(tr.refdef.rdflags & RDF_NOWORLDMODEL) &&
+		!(tr.refdef.rdflags & RDF_SKYBOXPORTAL) &&
+		(parms.stereoFrame == STEREO_LEFT || parms.stereoFrame == STEREO_RIGHT)) {
+		int eye = (parms.stereoFrame == STEREO_LEFT) ? 0 : 1;
+		float sep = VR_GetEyeStereoSeparation(eye) * tr.refdef.worldscale;
+		VectorMA(parms.or.origin, sep, parms.or.axis[1], parms.or.origin);
 	}
 
-	VectorCopy( fd->vieworg, parms.pvsOrigin );
+	VectorCopy( parms.or.origin, parms.pvsOrigin );
 
 	R_RenderView( &parms );
 

@@ -187,7 +187,7 @@ qboolean _UI_IsFullscreen( void );
 #if defined( __MACOS__ )
 #pragma export on
 #endif
-int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6, int arg7, int arg8, int arg9, int arg10, int arg11  ) {
+intptr_t vmMain( int command, intptr_t arg0, intptr_t arg1, intptr_t arg2, intptr_t arg3, intptr_t arg4, intptr_t arg5, intptr_t arg6, intptr_t arg7, intptr_t arg8, intptr_t arg9, intptr_t arg10, intptr_t arg11  ) {
 #if defined( __MACOS__ )
 #pragma export off
 #endif
@@ -196,7 +196,7 @@ int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int a
 		return UI_API_VERSION;
 
 	case UI_INIT:
-		_UI_Init( arg0 );
+		_UI_Init( (int)arg0 );
 		return 0;
 
 	case UI_SHUTDOWN:
@@ -204,36 +204,36 @@ int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int a
 		return 0;
 
 	case UI_KEY_EVENT:
-		_UI_KeyEvent( arg0, arg1 );
+		_UI_KeyEvent( (int)arg0, (int)arg1 );
 		return 0;
 
 	case UI_MOUSE_EVENT:
-		_UI_MouseEvent( arg0, arg1 );
+		_UI_MouseEvent( (int)arg0, (int)arg1 );
 		return 0;
 
 	case UI_MOUSE_EVENT_ABS:
-		_UI_MouseEventAbs( arg0, arg1 );
+		_UI_MouseEventAbs( (int)arg0, (int)arg1 );
 		return 0;
 
 	case UI_REFRESH:
-		_UI_Refresh( arg0 );
+		_UI_Refresh( (int)arg0 );
 		return 0;
 
 	case UI_IS_FULLSCREEN:
 		return _UI_IsFullscreen();
 
 	case UI_SET_ACTIVE_MENU:
-		_UI_SetActiveMenu( arg0 );
+		_UI_SetActiveMenu( (int)arg0 );
 		return 0;
 
 	case UI_GET_ACTIVE_MENU:
 		return _UI_GetActiveMenu();
 
 	case UI_CONSOLE_COMMAND:
-		return UI_ConsoleCommand( arg0 );
+		return UI_ConsoleCommand( (int)arg0 );
 
 	case UI_DRAW_CONNECT_SCREEN:
-		UI_DrawConnectScreen( arg0 );
+		UI_DrawConnectScreen( (int)arg0 );
 		return 0;
 	case UI_HASUNIQUECDKEY:             // mod authors need to observe this
 		return qtrue;
@@ -972,6 +972,13 @@ void UI_ParseMenu( const char *menuFile ) {
 	int handle;
 	pc_token_t token;
 
+	if ( !menuFile || ( !strstr( menuFile, ".menu" ) && !strstr( menuFile, ".txt" ) ) ) {
+#ifdef __ANDROID__
+		Com_Printf( "Android: ignoring invalid menu include '%s'\n", menuFile ? menuFile : "<null>" );
+#endif
+		return;
+	}
+
 	Com_Printf( "Parsing menu file:%s\n", menuFile );
 
 	handle = trap_PC_LoadSource( menuFile );
@@ -1039,6 +1046,13 @@ qboolean Load_Menu( int handle ) {
 			return qtrue;
 		}
 
+		if ( token.type != TT_STRING || ( !strstr( token.string, ".menu" ) && !strstr( token.string, ".txt" ) ) ) {
+#ifdef __ANDROID__
+			Com_Printf( "Android: skipping non-menu loadMenu token '%s'\n", token.string );
+#endif
+			continue;
+		}
+
 		UI_ParseMenu( token.string );
 	}
 	return qfalse;
@@ -1048,6 +1062,17 @@ void UI_LoadMenus( const char *menuFile, qboolean reset ) {
 	pc_token_t token;
 	int handle;
 	int start;
+
+	if ( !menuFile || ( !strstr( menuFile, ".menu" ) && !strstr( menuFile, ".txt" ) ) ) {
+#ifdef __ANDROID__
+		Com_Printf( "Android: UI_LoadMenus forcing invalid menu file '%s' to default\n", menuFile ? menuFile : "<null>" );
+#endif
+#ifdef WOLF_SP_DEMO
+		menuFile = "ui/demomenus.txt";
+#else
+		menuFile = "ui/menus.txt";
+#endif
+	}
 
 	start = trap_Milliseconds();
 
@@ -1146,10 +1171,14 @@ void UI_Load() {
 	char lastName[1024];
 	menuDef_t *menu = Menu_GetFocused();
 	char *menuSet = UI_Cvar_VariableString( "ui_menuFiles" );
+	lastName[0] = '\0';
 	if ( menu && menu->window.name ) {
 		strcpy( lastName, menu->window.name );
 	}
-	if ( menuSet == NULL || menuSet[0] == '\0' ) {
+	if ( menuSet == NULL || menuSet[0] == '\0' || !strstr( menuSet, ".txt" ) ) {
+#ifdef __ANDROID__
+		Com_Printf( "Android: UI_Load forcing ui_menuFiles from '%s' to default\n", menuSet ? menuSet : "<null>" );
+#endif
 #ifdef WOLF_SP_DEMO
 		menuSet = "ui/demomenus.txt";
 #else
@@ -6683,7 +6712,10 @@ void _UI_Init( qboolean inGameLoad ) {
 //	UI_ParseGameInfo("gameinfo.txt");
 
 	menuSet = UI_Cvar_VariableString( "ui_menuFiles" );
-	if ( menuSet == NULL || menuSet[0] == '\0' ) {
+	if ( menuSet == NULL || menuSet[0] == '\0' || !strstr( menuSet, ".txt" ) ) {
+#ifdef __ANDROID__
+		Com_Printf( "Android: _UI_Init forcing ui_menuFiles from '%s' to default\n", menuSet ? menuSet : "<null>" );
+#endif
 #ifdef WOLF_SP_DEMO
 		menuSet = "ui/demomenus.txt";
 #else
@@ -6821,7 +6853,10 @@ void _UI_MouseEventAbs( int x, int y ) {
 
 void UI_LoadNonIngame() {
 	const char *menuSet = UI_Cvar_VariableString( "ui_menuFiles" );
-	if ( menuSet == NULL || menuSet[0] == '\0' ) {
+	if ( menuSet == NULL || menuSet[0] == '\0' || !strstr( menuSet, ".txt" ) ) {
+#ifdef __ANDROID__
+		Com_Printf( "Android: UI_LoadNonIngame forcing ui_menuFiles from '%s' to default\n", menuSet ? menuSet : "<null>" );
+#endif
 #ifdef WOLF_SP_DEMO
 		menuSet = "ui/demomenus.txt";
 #else

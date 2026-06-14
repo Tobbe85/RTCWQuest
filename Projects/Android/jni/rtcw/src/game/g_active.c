@@ -440,6 +440,132 @@ Find all trigger entities that ent's current position touches.
 Spectators will only interact with teleporters.
 ============
 */
+static void G_DebugItemTouch( const char *stage, gentity_t *ent, gentity_t *itemEnt ) {
+	static int lastPrintTime = 0;
+	vec3_t itemOrigin;
+	vec3_t delta;
+
+	if ( !gVR || level.time < lastPrintTime + 250 ) {
+		return;
+	}
+
+	BG_EvaluateTrajectory( &itemEnt->s.pos, level.time, itemOrigin );
+	VectorSubtract( ent->client->ps.origin, itemOrigin, delta );
+	lastPrintTime = level.time;
+
+	G_Printf( "VR item touch %s: ent=%d class=%s eType=%d touch=%p item=%p ps=(%.1f %.1f %.1f) item=(%.1f %.1f %.1f) delta=(%.1f %.1f %.1f)\n",
+			  stage,
+			  itemEnt->s.number,
+			  itemEnt->classname ? itemEnt->classname : "<null>",
+			  itemEnt->s.eType,
+			  itemEnt->touch,
+			  itemEnt->item,
+			  ent->client->ps.origin[0], ent->client->ps.origin[1], ent->client->ps.origin[2],
+			  itemOrigin[0], itemOrigin[1], itemOrigin[2],
+			  delta[0], delta[1], delta[2] );
+}
+
+/*
+============
+G_TouchTriggersLerped
+
+Check trigger volumes along the current movement segment. This mirrors the
+Elite Force VR fix for small item/trigger volumes missed between server frames.
+============
+*/
+static void G_TouchTriggersLerped( gentity_t *ent ) {
+	int i, num;
+	float dist, curDist = 0.0f;
+	float step;
+	int touch[MAX_GENTITIES];
+	qboolean touched[MAX_GENTITIES];
+	gentity_t *hit;
+	trace_t trace;
+	vec3_t end, mins, maxs, diff;
+	static vec3_t range = { 40, 40, 52 };
+	qboolean done = qfalse;
+
+	if ( !ent->client ) {
+		return;
+	}
+
+	if ( ent->client->ps.stats[STAT_HEALTH] <= 0 ) {
+		return;
+	}
+
+	VectorSubtract( ent->client->ps.origin, ent->client->oldOrigin, diff );
+	dist = VectorNormalize( diff );
+	step = ent->r.maxs[1] * 0.5f;
+	if ( step < 4.0f ) {
+		step = 8.0f;
+	}
+
+	memset( touched, qfalse, sizeof( touched ) );
+
+	for ( curDist = 0.0f; !done; curDist += step ) {
+		if ( curDist >= dist ) {
+			VectorCopy( ent->client->ps.origin, end );
+			done = qtrue;
+		} else {
+			VectorMA( ent->client->oldOrigin, curDist, diff, end );
+		}
+
+		VectorSubtract( end, range, mins );
+		VectorAdd( end, range, maxs );
+
+		num = trap_EntitiesInBox( mins, maxs, touch, MAX_GENTITIES );
+
+		VectorAdd( end, ent->r.mins, mins );
+		VectorAdd( end, ent->r.maxs, maxs );
+
+		for ( i = 0 ; i < num ; i++ ) {
+			hit = &g_entities[touch[i]];
+
+			if ( touched[touch[i]] ) {
+				continue;
+			}
+			if ( !hit->touch && !ent->touch ) {
+				continue;
+			}
+			if ( !( hit->r.contents & CONTENTS_TRIGGER ) ) {
+				continue;
+			}
+
+			if ( ent->client->sess.sessionTeam == TEAM_SPECTATOR ) {
+				if ( hit->s.eType != ET_TELEPORT_TRIGGER ) {
+					continue;
+				}
+			}
+
+			if ( hit->s.eType == ET_ITEM ) {
+				playerState_t touchPs = ent->client->ps;
+				VectorCopy( end, touchPs.origin );
+				if ( !BG_PlayerTouchesItem( &touchPs, &hit->s, level.time ) ) {
+					G_DebugItemTouch( "lerp-miss", ent, hit );
+					continue;
+				}
+				G_DebugItemTouch( "lerp-touch", ent, hit );
+			} else {
+				if ( !trap_EntityContactCapsule( mins, maxs, hit ) ) {
+					continue;
+				}
+			}
+
+			touched[touch[i]] = qtrue;
+
+			memset( &trace, 0, sizeof( trace ) );
+
+			if ( hit->touch ) {
+				hit->touch( hit, ent, &trace );
+			}
+
+			if ( ( ent->r.svFlags & SVF_BOT ) && ( ent->touch ) ) {
+				ent->touch( ent, hit, &trace );
+			}
+		}
+	}
+}
+
 void    G_TouchTriggers( gentity_t *ent ) {
 	int i, num;
 	int touch[MAX_GENTITIES];
@@ -487,8 +613,10 @@ void    G_TouchTriggers( gentity_t *ent ) {
 		// so you don't have to actually contact its bounding box
 		if ( hit->s.eType == ET_ITEM ) {
 			if ( !BG_PlayerTouchesItem( &ent->client->ps, &hit->s, level.time ) ) {
+				G_DebugItemTouch( "miss", ent, hit );
 				continue;
 			}
+			G_DebugItemTouch( "touch", ent, hit );
 		} else {
 			// MrE: always use capsule for player
 			if ( !trap_EntityContactCapsule( mins, maxs, hit ) ) {
@@ -1149,10 +1277,15 @@ void ClientThink_real( gentity_t *ent ) {
 
 	} else if ( client->noclip ) {
 		client->ps.pm_type = PM_NOCLIP;
-	} else if ( client->ps.stats[STAT_HEALTH] <= 0 ) {
-		client->ps.pm_type = PM_DEAD;
 	} else {
-		client->ps.pm_type = PM_NORMAL;
+		if ( ent->r.svFlags & SVF_CASTAI ) {
+			client->ps.stats[STAT_HEALTH] = ent->health;
+		}
+		if ( client->ps.stats[STAT_HEALTH] <= 0 ) {
+			client->ps.pm_type = PM_DEAD;
+		} else {
+			client->ps.pm_type = PM_NORMAL;
+		}
 	}
 
 	// set parachute anim condition flag
@@ -1485,7 +1618,7 @@ void ClientThink_real( gentity_t *ent ) {
 	// link entity now, after any personal teleporters have been used
 	trap_LinkEntity( ent );
 	if ( !ent->client->noclip ) {
-		G_TouchTriggers( ent );
+		G_TouchTriggersLerped( ent );
 	}
 
 	// NOTE: now copy the exact origin over otherwise clients can be snapped into solid
@@ -1788,6 +1921,10 @@ void ClientEndFrame( gentity_t *ent ) {
 	}
 
 	ent->client->ps.stats[STAT_HEALTH] = ent->health;   // FIXME: get rid of ent->health...
+	if ( ( ent->r.svFlags & SVF_CASTAI ) && !ent->aiInactive && ent->health > 0 ) {
+		ent->client->ps.pm_type = PM_NORMAL;
+		ent->client->ps.pm_flags &= ~PMF_LIMBO;
+	}
 
 	G_SetClientSound( ent );
 
@@ -1798,6 +1935,11 @@ void ClientEndFrame( gentity_t *ent ) {
 		BG_PlayerStateToEntityStateExtraPolate( &ent->client->ps, &ent->s, ent->client->ps.commandTime, ( ( ent->r.svFlags & SVF_CASTAI ) == 0 ) );
 	} else {
 		BG_PlayerStateToEntityState( &ent->client->ps, &ent->s, ( ( ent->r.svFlags & SVF_CASTAI ) == 0 ) );
+	}
+
+	if ( ( ent->r.svFlags & SVF_CASTAI ) && !ent->aiInactive && ent->health > 0 ) {
+		VectorCopy( ent->client->ps.origin, ent->r.currentOrigin );
+		trap_LinkEntity( ent );
 	}
 
 	SendPendingPredictableEvents( &ent->client->ps );

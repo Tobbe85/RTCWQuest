@@ -1329,6 +1329,7 @@ const void *RB_StretchPic( const void *data ) {
 	const stretchPicCommand_t   *cmd;
 	shader_t *shader;
 	int numVerts, numIndexes;
+	static int largeBlackLogs;
 	cmd = (const stretchPicCommand_t *)data;
 
 	if ( !backEnd.projection2D ) {
@@ -1336,6 +1337,18 @@ const void *RB_StretchPic( const void *data ) {
 	}
 
 	shader = cmd->shader;
+	if ( largeBlackLogs < 40 &&
+		 cmd->w * cmd->h > ( glConfig.vidWidth * glConfig.vidHeight * 0.20f ) &&
+		 backEnd.color2D[0] < 8 && backEnd.color2D[1] < 8 && backEnd.color2D[2] < 8 &&
+		 backEnd.color2D[3] > 64 ) {
+		ri.Printf( PRINT_ALL,
+				   "VR large black stretchpic: shader=%s x=%.1f y=%.1f w=%.1f h=%.1f rgba=%d,%d,%d,%d frame=%d\n",
+				   shader ? shader->name : "<null>",
+				   cmd->x, cmd->y, cmd->w, cmd->h,
+				   backEnd.color2D[0], backEnd.color2D[1], backEnd.color2D[2], backEnd.color2D[3],
+				   tr.frameCount );
+		largeBlackLogs++;
+	}
 	if ( shader != tess.shader ) {
 		if ( tess.numIndexes ) {
 			RB_EndSurface();
@@ -1518,8 +1531,6 @@ const void  *RB_DrawBuffer( const void *data ) {
 	qglDrawBuffer( cmd->buffer );
 #endif
 */
-	RTCWVR_prepareEyeBuffer(cmd->buffer);
-
 	// clear screen for debugging
 	if ( r_clear->integer ) {
 		qglClearColor( 0, 0, 0, 1 );

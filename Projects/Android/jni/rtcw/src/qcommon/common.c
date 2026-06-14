@@ -1098,7 +1098,7 @@ void Com_InitHunkMemory( void ) {
 		Com_Error( ERR_FATAL, "Hunk data failed to allocate %i megs", s_hunkTotal / ( 1024 * 1024 ) );
 	}
 	// cacheline align
-	s_hunkData = ( byte * )( ( (int)s_hunkData + 31 ) & ~31 );
+	s_hunkData = ( byte * )( ( (uintptr_t)s_hunkData + 31 ) & ~(uintptr_t)31 );
 	Hunk_Clear();
 
 	Cmd_AddCommand( "meminfo", Com_Meminfo_f );
@@ -1953,6 +1953,23 @@ void Com_SetRecommended( qboolean vidrestart ) {
 		Cbuf_AddText( "vid_restart\n" );
 	}
 }
+
+#ifdef __ANDROID__
+static void Com_AndroidSanitizeArchivedCvars( void ) {
+	const char *menuFiles = Cvar_VariableString( "ui_menuFiles" );
+
+	if ( !menuFiles[0] || !strstr( menuFiles, ".txt" ) ) {
+		Com_Printf( "Android: forcing ui_menuFiles to ui/menus.txt\n" );
+		Cvar_Set( "ui_menuFiles", "ui/menus.txt" );
+	}
+
+	if ( Cvar_VariableIntegerValue( "com_soundMegs" ) < 16 ) {
+		Com_Printf( "Android: forcing com_soundMegs to 64\n" );
+		Cvar_Set( "com_soundMegs", "64" );
+	}
+}
+#endif
+
 /*
 =================
 Com_Init
@@ -2018,6 +2035,10 @@ void Com_Init( char *commandLine ) {
 	// override anything from the config files with command line args
 	Com_StartupVariable( NULL );
 
+#ifdef __ANDROID__
+	Com_AndroidSanitizeArchivedCvars();
+#endif
+
 	// get dedicated here for proper hunk megs initialization
 #ifdef DEDICATED
 	com_dedicated = Cvar_Get( "dedicated", "1", CVAR_ROM );
@@ -2056,6 +2077,15 @@ void Com_Init( char *commandLine ) {
 
 	com_introPlayed = Cvar_Get( "com_introplayed", "0", CVAR_ARCHIVE );
 	com_recommendedSet = Cvar_Get( "com_recommendedSet", "0", CVAR_ARCHIVE );
+#ifdef __ANDROID__
+	Cvar_Get( "vr_autoPlayerStart", "0", CVAR_ARCHIVE );
+	Cvar_Set( "vr_autoPlayerStart", "0" );
+	Cvar_Get( "vr_skipCinematics", "0", CVAR_ARCHIVE );
+	Cvar_Set( "vr_skipCinematics", "0" );
+	Cvar_Get( "vr_comfort_vignette", "0", CVAR_ARCHIVE );
+	Cvar_Get( "vr_forceDisableVignette", "0", 0 );
+	Cvar_Set( "vr_forceDisableVignette", "0" );
+#endif
 
 	Cvar_Get( "savegame_loading", "0", CVAR_ROM );
 
@@ -2100,7 +2130,8 @@ void Com_Init( char *commandLine ) {
 	com_frameTime = Com_Milliseconds();
 
 	// add + commands from command line
-	if ( !Com_AddStartupCommands() ) {
+	qboolean addedStartupCommands = Com_AddStartupCommands();
+	if ( !addedStartupCommands ) {
 		// if the user didn't give any commands, run default action
 	}
 
@@ -2108,6 +2139,14 @@ void Com_Init( char *commandLine ) {
 	Cvar_Set( "r_uiFullScreen", "1" );
 
 	CL_StartHunkUsers();
+
+#ifdef __ANDROID__
+	if ( Cvar_VariableIntegerValue( "vr_autoPlayerStart" ) && !Cvar_VariableIntegerValue( "sv_running" ) ) {
+		Cvar_Set( "com_introplayed", "1" );
+		Com_Printf( "Android: vr_autoPlayerStart skipping intro and queuing spdevmap escape1\n" );
+		Cbuf_AddText( "spdevmap escape1\n" );
+	}
+#endif
 
 	// delay this so potential wicked3d dll can find a wolf window
 	if ( !com_dedicated->integer ) {
@@ -2122,7 +2161,11 @@ void Com_Init( char *commandLine ) {
 
 	if ( !com_dedicated->integer ) {
 		//Cbuf_AddText ("cinematic gmlogo.RoQ\n");
+#ifdef __ANDROID__
+		if ( !addedStartupCommands && !Cvar_VariableIntegerValue( "vr_autoPlayerStart" ) && !com_introPlayed->integer ) {
+#else
 		if ( !com_introPlayed->integer ) {
+#endif
 		#ifdef __MACOS__
 			extern void PlayIntroMovies( void );
 			PlayIntroMovies();

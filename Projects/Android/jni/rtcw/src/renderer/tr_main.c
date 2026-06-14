@@ -49,6 +49,8 @@ static float s_flipMatrix[16] = {
 
 refimport_t ri;
 
+qboolean VR_GetFovTangentsForEye(int eye, float *tanLeft, float *tanRight, float *tanUp, float *tanDown);
+
 // entities that will have procedurally generated surfaces will just
 // point at this for their sorting surface
 surfaceType_t entitySurface = SF_ENTITY;
@@ -324,7 +326,7 @@ int R_CullLocalBox( vec3_t bounds[2] ) {
 	int anyBack;
 	int front, back;
 
-	if ( r_nocull->integer ) {
+	if ( r_nocull->integer || ( tr.refdef.rdflags & RDF_VR_CINEMATIC ) ) {
 		return CULL_CLIP;
 	}
 
@@ -391,7 +393,7 @@ int R_CullPointAndRadius( vec3_t pt, float radius ) {
 	cplane_t    *frust;
 	qboolean mightBeClipped = qfalse;
 
-	if ( r_nocull->integer ) {
+	if ( r_nocull->integer || ( tr.refdef.rdflags & RDF_VR_CINEMATIC ) ) {
 		return CULL_CLIP;
 	}
 
@@ -818,6 +820,7 @@ void R_SetupProjection( void ) {
 	float xmin, xmax, ymin, ymax;
 	float width, height, depth;
 	float zNear, zFar;
+	qboolean vrProjection = qfalse;
 
 	// dynamically compute far clip plane distance
 	SetFarClip();
@@ -832,11 +835,37 @@ void R_SetupProjection( void ) {
 		zFar = tr.viewParms.zFar;
 	}
 
-	ymax = zNear * tan( tr.refdef.fov_y * M_PI / 360.0f );
-	ymin = -ymax;
+	if (!(tr.refdef.rdflags & RDF_NOWORLDMODEL) &&
+		(tr.viewParms.stereoFrame == STEREO_LEFT || tr.viewParms.stereoFrame == STEREO_RIGHT)) {
+		float tanLeft, tanRight, tanUp, tanDown;
+		int eye = (tr.viewParms.stereoFrame == STEREO_LEFT) ? 0 : 1;
 
-	xmax = zNear * tan( tr.refdef.fov_x * M_PI / 360.0f );
-	xmin = -xmax;
+		if (VR_GetFovTangentsForEye(eye, &tanLeft, &tanRight, &tanUp, &tanDown)) {
+			float cullFovX = 2.0f * atan( fmaxf( fabsf( tanLeft ), fabsf( tanRight ) ) * 1.2f ) * 180.0f / M_PI;
+			float cullFovY = 2.0f * atan( fmaxf( fabsf( tanUp ), fabsf( tanDown ) ) * 1.2f ) * 180.0f / M_PI;
+
+			xmin = zNear * tanLeft;
+			xmax = zNear * tanRight;
+			ymin = zNear * tanDown;
+			ymax = zNear * tanUp;
+			vrProjection = qtrue;
+
+			if ( tr.viewParms.fovX < cullFovX ) {
+				tr.viewParms.fovX = cullFovX;
+			}
+			if ( tr.viewParms.fovY < cullFovY ) {
+				tr.viewParms.fovY = cullFovY;
+			}
+		}
+	}
+
+	if (!vrProjection) {
+		ymax = zNear * tan( tr.refdef.fov_y * M_PI / 360.0f );
+		ymin = -ymax;
+
+		xmax = zNear * tan( tr.refdef.fov_x * M_PI / 360.0f );
+		xmin = -xmax;
+	}
 
 	width = xmax - xmin;
 	height = ymax - ymin;
@@ -1365,7 +1394,13 @@ qsort replacement
 
 =================
 */
-#define SWAP_DRAW_SURF( a,b ) temp = ( (int *)a )[0]; ( (int *)a )[0] = ( (int *)b )[0]; ( (int *)b )[0] = temp; temp = ( (int *)a )[1]; ( (int *)a )[1] = ( (int *)b )[1]; ( (int *)b )[1] = temp;
+static ID_INLINE void SwapDrawSurf( void *a, void *b ) {
+	drawSurf_t temp = *(drawSurf_t *)a;
+	*(drawSurf_t *)a = *(drawSurf_t *)b;
+	*(drawSurf_t *)b = temp;
+}
+
+#define SWAP_DRAW_SURF( a,b ) SwapDrawSurf( (a), (b) )
 
 /* this parameter defines the cutoff between using quick sort and
    insertion sort for arrays; arrays with lengths shorter or equal to the
@@ -1375,7 +1410,6 @@ qsort replacement
 
 static void shortsort( drawSurf_t *lo, drawSurf_t *hi ) {
 	drawSurf_t  *p, *max;
-	int temp;
 
 	while ( hi > lo ) {
 		max = lo;
@@ -1405,11 +1439,6 @@ void qsortFast(
 	unsigned size;              /* size of the sub-array */
 	char *lostk[30], *histk[30];
 	int stkptr;                 /* stack for saving sub-array to be processed */
-	int temp;
-
-	if ( sizeof( drawSurf_t ) != 8 ) {
-		ri.Error( ERR_DROP, "change SWAP_DRAW_SURF macro" );
-	}
 
 	/* Note: the number of stack entries required is no more than
 	   1 + log2(size), so 30 is sufficient for any array */

@@ -486,7 +486,7 @@ nextInstruction2:
 
 			src = (int *)&image[ r0 & dataMask ];
 			dest = (int *)&image[ r1 & dataMask ];
-			if ( ( (int)src | (int)dest | count ) & 3 ) {
+			if ( ( (intptr_t)src | (intptr_t)dest | count ) & 3 ) {
 				Com_Error( ERR_DROP, "OP_BLOCK_COPY not dword aligned" );
 			}
 			count >>= 2;
@@ -524,8 +524,16 @@ nextInstruction2:
 #endif
 				*(int *)&image[ programStack + 4 ] = -1 - programCounter;
 
-//VM_LogSyscalls( (int *)&image[ programStack + 4 ] );
-				r = vm->systemCall( (int *)&image[ programStack + 4 ] );
+				{
+					int *qvmArgs = (int *)&image[ programStack + 4 ];
+					intptr_t syscallArgs[16];
+					int i;
+					for ( i = 0; i < sizeof( syscallArgs ) / sizeof( syscallArgs[0] ); i++ ) {
+						syscallArgs[i] = qvmArgs[i];
+					}
+//VM_LogSyscalls( syscallArgs );
+					r = (int)vm->systemCall( syscallArgs );
+				}
 
 #ifdef DEBUG_VM
 				// this is just our stack frame pointer, only needed

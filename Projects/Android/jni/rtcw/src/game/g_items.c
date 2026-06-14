@@ -41,6 +41,8 @@ If you have questions concerning this license or the applicable additional terms
 #include "g_local.h"
 #include "../../../RTCWVR/VrClientInfo.h"
 
+extern vr_client_info_t* gVR;
+
 
 #define RESPAWN_SP          -1
 #define RESPAWN_KEY         4
@@ -661,7 +663,22 @@ Touch_Item
 */
 void Touch_Item_Auto( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	if ( other->client->pers.autoActivate == PICKUP_ACTIVATE ) {
-		return;
+		if ( gVR ) {
+			other->client->pers.autoActivate = PICKUP_TOUCH;
+			G_Printf( "VR Touch_Item_Auto forced touch pickup: ent=%d class=%s\n",
+					  ent->s.number,
+					  ent->classname ? ent->classname : "<null>" );
+		} else {
+			static int lastAutoActivatePrintTime = 0;
+			if ( level.time > lastAutoActivatePrintTime + 250 ) {
+				lastAutoActivatePrintTime = level.time;
+				G_Printf( "VR Touch_Item_Auto skipped: ent=%d class=%s autoActivate=%d\n",
+						  ent->s.number,
+						  ent->classname ? ent->classname : "<null>",
+						  other->client->pers.autoActivate );
+			}
+			return;
+		}
 	}
 
 	ent->active = qtrue;
@@ -681,9 +698,17 @@ Touch_Item
 void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	int respawn;
 	int makenoise = EV_ITEM_PICKUP;
+	static int lastVrItemPrintTime = 0;
 
 	// only activated items can be picked up
 	if ( !ent->active ) {
+		if ( level.time > lastVrItemPrintTime + 250 ) {
+			lastVrItemPrintTime = level.time;
+			G_Printf( "VR Touch_Item inactive: ent=%d class=%s item=%p\n",
+					  ent->s.number,
+					  ent->classname ? ent->classname : "<null>",
+					  ent->item );
+		}
 		return;
 	} else {
 		// need to set active to false if player is maxed out
@@ -691,15 +716,56 @@ void Touch_Item( gentity_t *ent, gentity_t *other, trace_t *trace ) {
 	}
 
 	if ( !other->client ) {
+		if ( level.time > lastVrItemPrintTime + 250 ) {
+			lastVrItemPrintTime = level.time;
+			G_Printf( "VR Touch_Item no-client: ent=%d class=%s item=%p other=%d\n",
+					  ent->s.number,
+					  ent->classname ? ent->classname : "<null>",
+					  ent->item,
+					  other ? other->s.number : -1 );
+		}
 		return;
 	}
 	if ( other->health < 1 ) {
+		if ( level.time > lastVrItemPrintTime + 250 ) {
+			lastVrItemPrintTime = level.time;
+			G_Printf( "VR Touch_Item dead-player: ent=%d class=%s item=%p health=%d\n",
+					  ent->s.number,
+					  ent->classname ? ent->classname : "<null>",
+					  ent->item,
+					  other->health );
+		}
 		return;     // dead people can't pickup
 
 	}
 	// the same pickup rules are used for client side and server side
 	if ( !BG_CanItemBeGrabbed( &ent->s, &other->client->ps ) ) {
+		if ( level.time > lastVrItemPrintTime + 250 ) {
+			lastVrItemPrintTime = level.time;
+			G_Printf( "VR Touch_Item cannot-grab: ent=%d class=%s item=%p itemClass=%s giType=%d giTag=%d modelindex=%d psWeapon=%d psOrigin=(%.1f %.1f %.1f)\n",
+					  ent->s.number,
+					  ent->classname ? ent->classname : "<null>",
+					  ent->item,
+					  ent->item && ent->item->classname ? ent->item->classname : "<null>",
+					  ent->item ? ent->item->giType : -1,
+					  ent->item ? ent->item->giTag : -1,
+					  ent->s.modelindex,
+					  other->client->ps.weapon,
+					  other->client->ps.origin[0], other->client->ps.origin[1], other->client->ps.origin[2] );
+		}
 		return;
+	}
+
+	if ( level.time > lastVrItemPrintTime + 250 ) {
+		lastVrItemPrintTime = level.time;
+		G_Printf( "VR Touch_Item pickup: ent=%d class=%s item=%p itemClass=%s giType=%d giTag=%d modelindex=%d\n",
+				  ent->s.number,
+				  ent->classname ? ent->classname : "<null>",
+				  ent->item,
+				  ent->item && ent->item->classname ? ent->item->classname : "<null>",
+				  ent->item ? ent->item->giType : -1,
+				  ent->item ? ent->item->giTag : -1,
+				  ent->s.modelindex );
 	}
 
 	G_LogPrintf( "Item: %i %s\n", other->s.number, ent->item->classname );

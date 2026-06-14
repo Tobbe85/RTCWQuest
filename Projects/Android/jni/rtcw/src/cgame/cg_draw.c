@@ -3399,6 +3399,7 @@ float filteredViewYawDelta = 0.0f;
 
 static void CG_DrawVignette( void )
 {
+	static qboolean loggedForcedOff = qfalse;
 	playerState_t	*ps;
 	ps = &cg.snap->ps;
 
@@ -3406,6 +3407,15 @@ static void CG_DrawVignette( void )
 	char buf[32];
 	trap_Cvar_VariableStringBuffer("vr_comfort_vignette", buf, sizeof(buf)); // defined in VrCvars.h
 	vr_comfort_vignette = atof(buf);
+	if (vr_comfort_vignette > 0.0f && trap_Cvar_VariableIntegerValue("vr_forceDisableVignette"))
+	{
+		if (!loggedForcedOff)
+		{
+			CG_Printf("VR disabling comfort vignette for OpenXR test build (was %.2f)\n", vr_comfort_vignette);
+			loggedForcedOff = qtrue;
+		}
+		return;
+	}
 	if (vr_comfort_vignette <= 0.0f || vr_comfort_vignette > 1.0f || cg.zoomedScope || cg.zoomedBinoc)
 	{
 		return;
@@ -3498,10 +3508,13 @@ static void CG_Draw2D( void ) {
 	CG_DrawFlashBlendBehindHUD();
 
 	if ( cg.snap->ps.persistant[PERS_TEAM] == TEAM_SPECTATOR ) {
+		cg.drawingHUD = CG_HUD_SCALED;
 		CG_DrawSpectator();
 		CG_DrawCrosshair();
 		CG_DrawCrosshairNames();
+		cg.drawingHUD = CG_HUD_NORMAL;
 	} else {
+		cg.drawingHUD = CG_HUD_SCALED;
 		// don't draw any status if dead
 		if ( cg.snap->ps.stats[STAT_HEALTH] > 0 ) {
 
@@ -3528,8 +3541,10 @@ static void CG_Draw2D( void ) {
 		if ( cgs.gametype >= GT_TEAM ) {
 			CG_DrawTeamInfo();
 		}
+		cg.drawingHUD = CG_HUD_NORMAL;
 	}
 
+	cg.drawingHUD = CG_HUD_SCALED;
 	CG_DrawVote();
 
 	CG_DrawLagometer();
@@ -3549,6 +3564,7 @@ static void CG_Draw2D( void ) {
 
 		CG_DrawObjectiveInfo();     // NERVE - SMF
 	}
+	cg.drawingHUD = CG_HUD_NORMAL;
 
 	// Ridah, draw flash blends now
 	CG_DrawFlashBlend();
@@ -3680,7 +3696,8 @@ CG_Teleport
 ====================
 */
 void CG_Teleport() {
-	if (!cgVR->teleportenabled || !cgVR->teleportseek ||
+	if (cg.cameraMode || cgVR->cin_camera ||
+		!cgVR->teleportenabled || !cgVR->teleportseek ||
 		cg.predictedPlayerState.stats[STAT_HEALTH] <= 0)
 		return;
 
@@ -3755,9 +3772,7 @@ void CG_DrawActive( int stereoView ) {
 	}
 
 	cg.refdef.stereoView = stereoView;
-	separation = stereoView == 1 ?
-                 cg_worldScale.value * (-cg_stereoSeparation.value / 2) : //left
-                 cg_worldScale.value * (cg_stereoSeparation.value / 2); // right
+	separation = 0.0f;
 
     cg.refdef.worldscale = cg_worldScale.value;
     VectorCopy(cg.refdefViewAngles, cg.refdef.viewangles);

@@ -27,6 +27,9 @@ If you have questions concerning this license or the applicable additional terms
 */
 
 #include "g_local.h"
+#include "../../../RTCWVR/VrClientInfo.h"
+
+extern vr_client_info_t* gVR;
 
 // g_client.c -- client functions that don't happen every frame
 
@@ -1326,6 +1329,10 @@ void ClientUserinfoChanged( int clientNum ) {
 		client->pers.autoActivate = PICKUP_ACTIVATE;
 	} else {
 		client->pers.autoActivate = PICKUP_TOUCH;
+	}
+	if ( gVR && client->pers.autoActivate == PICKUP_ACTIVATE ) {
+		client->pers.autoActivate = PICKUP_TOUCH;
+		G_Printf( "VR ClientUserinfoChanged: forcing autoActivate PICKUP_TOUCH, cg_autoactivate='%s'\n", s );
 	}
 
 	// check the auto empty weapon switching

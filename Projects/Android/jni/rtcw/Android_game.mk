@@ -5,7 +5,7 @@ LOCAL_PATH := $(call my-dir)
 include $(CLEAR_VARS)
 
 
-LOCAL_MODULE    := qagamearm
+LOCAL_MODULE    := qagame
 
 LOCAL_CFLAGS = $(RTCW_BASE_CFLAGS)
 

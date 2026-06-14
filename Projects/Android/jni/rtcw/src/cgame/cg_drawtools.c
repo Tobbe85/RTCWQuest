@@ -32,6 +32,7 @@ If you have questions concerning this license or the applicable additional terms
 
 extern vr_client_info_t* cgVR;
 int hudflags = 0;
+float cg_vrHudYBias = 0.0f;
 /*
 ================
 CG_AdjustFrom640
@@ -84,7 +85,7 @@ void CG_AdjustFrom640( float *x, float *y, float *w, float *h ) {
 	else if ((hudflags & HUD_FLAGS_FULLSCREEN)
 		|| cg.zoomedScope || cg.zoomedBinoc || cg.zoomval > 0
 		|| cg.viewFade > 0 || ( cgs.scrFadeAlphaCurrent > 0.0 )
-		|| !cgVR->visible_hud)
+		|| !cgVR || cgVR->screen || cgVR->cin_camera || !cgVR->visible_hud || cg.drawingHUD != CG_HUD_SCALED)
 	{
 		// scale for screen sizes
 		*x *= cgs.screenXScale;
@@ -94,21 +95,53 @@ void CG_AdjustFrom640( float *x, float *y, float *w, float *h ) {
 	}
 	else // scale to clearly visible portion of VR screen
 	{
-		float screenXScale = cgs.screenXScale / 2.75f;
-		float screenYScale = cgs.screenYScale / 2.75f;
+		const float halfIPD = 0.032f;
+		float scale = cg_hudScale.value;
+		float depth = cg_hudDepth.value;
+		float fovX = cgVR->fov_x;
+		float parallax;
+		float xoffset;
+		float yoffset;
+		int eye = cgVR->eye;
 
-		int xoffset = (hudflags & HUD_FLAGS_MG42_CROSSHAIR) ? -12 : -24;
-		if (cg.refdef.stereoView == 1) {
-			xoffset *= -1;
+		if ( eye < 0 || eye > 1 ) {
+			eye = 0;
 		}
 
-		*x *= screenXScale;
-		*y *= screenYScale;
-		*w *= screenXScale;
-		*h *= screenYScale;
+		if ( scale < 0.1f ) {
+			scale = 0.1f;
+		} else if ( scale > 1.0f ) {
+			scale = 1.0f;
+		}
+		if ( depth < 0.5f ) {
+			depth = 0.5f;
+		}
+		if ( fovX < 1.0f ) {
+			fovX = 90.0f;
+		}
 
-		*x += (cg.refdef.width - (640 * screenXScale)) / 2.0f + xoffset;
-		*y += (cg.refdef.height - (480 * screenYScale)) / 2.0f;
+		parallax = ( atan2f( halfIPD, depth ) / ( fovX * ( (float)M_PI / 180.0f ) * 0.5f ) ) * 320.0f;
+		xoffset = cgVR->off_center_fov_x[eye] * 640.0f;
+		yoffset = cgVR->off_center_fov_y[eye] * 480.0f;
+		if ( eye == 0 ) {
+			xoffset += parallax;
+		} else {
+			xoffset -= parallax;
+		}
+
+		if (hudflags & HUD_FLAGS_MG42_CROSSHAIR) {
+			xoffset *= 0.5f;
+		}
+
+		*x = *x * scale + ( 640.0f - 640.0f * scale ) * 0.5f + xoffset;
+		*y = *y * scale + ( 480.0f - 480.0f * scale ) * 0.5f - cg_hudYOffset.value - yoffset + cg_vrHudYBias;
+		*w *= scale;
+		*h *= scale;
+
+		*x *= cgs.screenXScale;
+		*y *= cgs.screenYScale;
+		*w *= cgs.screenXScale;
+		*h *= cgs.screenYScale;
 	}
 }
 

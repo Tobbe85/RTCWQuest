@@ -381,6 +381,7 @@ int AAS_LoadMap( const char *mapname ) {
 		//load the map
 		errnum = AAS_LoadFiles( this_mapname );
 		if ( errnum != BLERR_NOERROR ) {
+			botimport.Print( PRT_WARNING, "AAS_LoadMap: %s failed with BLERR %d\n", this_mapname, errnum );
 			( *aasworld ).loaded = qfalse;
 			// RF, we are allowed to skip one of the files, but not both
 			//return errnum;
@@ -402,6 +403,7 @@ int AAS_LoadMap( const char *mapname ) {
 	}
 
 	if ( !loaded ) {
+		botimport.Print( PRT_ERROR, "AAS_LoadMap: no AAS worlds loaded for %s, last BLERR %d\n", mapname, missingErrNum );
 		return missingErrNum;
 	}
 

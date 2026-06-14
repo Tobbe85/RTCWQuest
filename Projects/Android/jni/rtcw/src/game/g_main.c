@@ -282,53 +282,53 @@ This must be the very first function compiled into the .q3vm file
 #if defined( __MACOS__ )
 #pragma export on
 #endif
-int vmMain( int command, int arg0, int arg1, int arg2, int arg3, int arg4, int arg5, int arg6 ) {
+intptr_t vmMain( int command, intptr_t arg0, intptr_t arg1, intptr_t arg2, intptr_t arg3, intptr_t arg4, intptr_t arg5, intptr_t arg6 ) {
 #if defined( __MACOS__ )
 #pragma export off
 #endif
 	switch ( command ) {
 	case GAME_INIT:
-		G_InitGame( arg0, arg1, arg2 );
+		G_InitGame( (int)arg0, (int)arg1, (int)arg2 );
 		return 0;
 	case GAME_SHUTDOWN:
-		G_ShutdownGame( arg0 );
+		G_ShutdownGame( (int)arg0 );
 		return 0;
 	case GAME_CLIENT_CONNECT:
-		return (int)ClientConnect( arg0, arg1, arg2 );
+		return (intptr_t)ClientConnect( (int)arg0, (int)arg1, (int)arg2 );
 	case GAME_CLIENT_THINK:
-		ClientThink( arg0 );
+		ClientThink( (int)arg0 );
 		return 0;
 	case GAME_CLIENT_USERINFO_CHANGED:
-		ClientUserinfoChanged( arg0 );
+		ClientUserinfoChanged( (int)arg0 );
 		return 0;
 	case GAME_CLIENT_DISCONNECT:
-		ClientDisconnect( arg0 );
+		ClientDisconnect( (int)arg0 );
 		return 0;
 	case GAME_CLIENT_BEGIN:
-		ClientBegin( arg0 );
+		ClientBegin( (int)arg0 );
 		return 0;
 	case GAME_CLIENT_COMMAND:
-		ClientCommand( arg0 );
+		ClientCommand( (int)arg0 );
 		return 0;
 	case GAME_RUN_FRAME:
-		G_RunFrame( arg0 );
+		G_RunFrame( (int)arg0 );
 		return 0;
 	case GAME_CONSOLE_COMMAND:
 		return ConsoleCommand();
 	case BOTAI_START_FRAME:
-		return BotAIStartFrame( arg0 );
+		return BotAIStartFrame( (int)arg0 );
 		// Ridah, Cast AI
 	case AICAST_VISIBLEFROMPOS:
-		return AICast_VisibleFromPos( (float *)arg0, arg1, (float *)arg2, arg3, arg4 );
+		return AICast_VisibleFromPos( (float *)arg0, (int)arg1, (float *)arg2, (int)arg3, (int)arg4 );
 	case AICAST_CHECKATTACKATPOS:
-		return AICast_CheckAttackAtPos( arg0, arg1, (float *)arg2, arg3, arg4 );
+		return AICast_CheckAttackAtPos( (int)arg0, (int)arg1, (float *)arg2, (int)arg3, (int)arg4 );
 		// done.
 
 	case GAME_RETRIEVE_MOVESPEEDS_FROM_CLIENT:
-		G_RetrieveMoveSpeedsFromClient( arg0, (char *)arg1 );
+		G_RetrieveMoveSpeedsFromClient( (int)arg0, (char *)arg1 );
 		return 0;
 	case GAME_GETMODELINFO:
-		return G_GetModelInfo( arg0, (char *)arg1, (animModelInfo_t **)arg2 );
+		return G_GetModelInfo( (int)arg0, (char *)arg1, (animModelInfo_t **)arg2 );
 
 	case GAME_SET_VR_CLIENT_INFO:
 		gVR = (vr_client_info_t*)arg0;
@@ -2408,6 +2408,62 @@ G_RunFrame
 Advances the non-player objects in the world
 ================
 */
+static void G_VRLogCastClientState( const char *phase ) {
+	static int lastAfterAiLogTime;
+	static int lastAfterClientEndLogTime;
+	int *lastLogTime;
+	int i;
+	int inuseClients = 0;
+	int castClients = 0;
+	int castPlayers = 0;
+	int linkedCast = 0;
+	int firstLogged = 0;
+	gentity_t *ent;
+
+	lastLogTime = !Q_stricmp( phase, "after-ai" ) ? &lastAfterAiLogTime : &lastAfterClientEndLogTime;
+	if ( level.time < *lastLogTime + 1000 ) {
+		return;
+	}
+	*lastLogTime = level.time;
+
+	for ( i = 0, ent = g_entities; i < level.maxclients; i++, ent++ ) {
+		if ( !ent->inuse ) {
+			continue;
+		}
+		inuseClients++;
+		if ( ent->r.svFlags & SVF_CASTAI ) {
+			castClients++;
+			if ( ent->s.eType == ET_PLAYER ) {
+				castPlayers++;
+			}
+			if ( ent->r.linked ) {
+				linkedCast++;
+			}
+		}
+	}
+
+	G_Printf( "VR game cast probe %s: time=%d maxclients=%d numEnt=%d inuseClients=%d castClients=%d castPlayers=%d linkedCast=%d\n",
+			  phase, level.time, level.maxclients, level.num_entities, inuseClients,
+			  castClients, castPlayers, linkedCast );
+
+	for ( i = 0, ent = g_entities; i < level.maxclients && firstLogged < 6; i++, ent++ ) {
+		if ( !ent->inuse || !( ent->r.svFlags & SVF_CASTAI ) ) {
+			continue;
+		}
+		firstLogged++;
+		G_Printf( "VR game cast detail %s: slot=%d eType=%d number=%d clientNum=%d linked=%d aiInactive=%d svFlags=0x%x eFlags=0x%x health=%d psHealth=%d pmType=%d origin=%.1f %.1f %.1f psOrigin=%.1f %.1f %.1f\n",
+				  phase, i, ent->s.eType, ent->s.number,
+				  ent->client ? ent->client->ps.clientNum : -1,
+				  ent->r.linked, ent->aiInactive, ent->r.svFlags, ent->s.eFlags, ent->health,
+				  ent->client ? ent->client->ps.stats[STAT_HEALTH] : -1,
+				  ent->client ? ent->client->ps.pm_type : -1,
+				  ent->s.origin[0], ent->s.origin[1], ent->s.origin[2],
+				  ent->client ? ent->client->ps.origin[0] : 0.0f,
+				  ent->client ? ent->client->ps.origin[1] : 0.0f,
+				  ent->client ? ent->client->ps.origin[2] : 0.0f );
+	}
+}
+
 void G_RunFrame( int levelTime ) {
 	int i;
 	gentity_t   *ent;
@@ -2560,6 +2616,7 @@ void G_RunFrame( int levelTime ) {
 
 	// Ridah, move the AI
 	AICast_StartServerFrame( level.time );
+	G_VRLogCastClientState( "after-ai" );
 
 //start = trap_Milliseconds();
 	// perform final fixups on the players
@@ -2569,6 +2626,7 @@ void G_RunFrame( int levelTime ) {
 			ClientEndFrame( ent );
 		}
 	}
+	G_VRLogCastClientState( "after-client-end" );
 //end = trap_Milliseconds();
 
 	// see if it is time to do a tournement restart

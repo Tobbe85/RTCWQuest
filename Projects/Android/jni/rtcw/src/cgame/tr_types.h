@@ -66,6 +66,7 @@ If you have questions concerning this license or the applicable additional terms
 #define RDF_UNDERWATER      ( 1 << 4 )  // so the renderer knows to use underwater fog when the player is underwater
 #define RDF_DRAWINGSKY      ( 1 << 5 )
 #define RDF_SNOOPERVIEW     ( 1 << 6 )  //----(SA)	added
+#define RDF_VR_CINEMATIC    ( 1 << 7 )  // VR camera cutscenes need HMD-safe renderer culling
 
 
 typedef struct {

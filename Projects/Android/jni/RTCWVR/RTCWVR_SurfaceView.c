@@ -1,2380 +1,758 @@
-/************************************************************************************
-
-Filename	:	RTCWVR_SurfaceView.c based on VrCubeWorld_SurfaceView.c
-Content		:	This sample uses a plain Android SurfaceView and handles all
-				Activity and Surface life cycle events in native code. This sample
-				does not use the application framework and also does not use LibOVR.
-				This sample only uses the VrApi.
-Created		:	March, 2015
-Authors		:	J.M.P. van Waveren / Simon Brown
-
-Copyright	:	Copyright 2015 Oculus VR, LLC. All Rights reserved.
-
-*************************************************************************************/
-
-#include <stdio.h>
-#include <ctype.h>
-#include <stdlib.h>
-#include <time.h>
-#include <unistd.h>
+#include <jni.h>
 #include <pthread.h>
-#include <sys/prctl.h>					// for prctl( PR_SET_NAME )
-#include <android/log.h>
-#include <android/native_window_jni.h>	// for native window JNI
-#include <android/input.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
 
-#include "argtable3.h"
-#include "VrInput.h"
+#include <android/native_window_jni.h>
+
+#include "VrCommon.h"
+#include "TBXR_Common.h"
 #include "VrCvars.h"
-
-#include <EGL/egl.h>
-#include <EGL/eglext.h>
-#include <GLES3/gl3.h>
-#include <GLES3/gl3ext.h>
-#include <GLES/gl2ext.h>
-
-#include "VrApi.h"
-#include "VrApi_Helpers.h"
-#include "VrApi_SystemUtils.h"
-#include "VrApi_Input.h"
-#include "VrApi_Types.h"
-
-#include <src/gl/loader.h>
-
-//#include <SDL2/SDL.h>
-//#include <SDL2/SDL_main.h>
-#include <src/client/client.h>
-
-#include "VrCompositor.h"
 #include "VrInput.h"
 
-#if !defined( EGL_OPENGL_ES3_BIT_KHR )
-#define EGL_OPENGL_ES3_BIT_KHR		0x0040
-#endif
+#include "../rtcw/src/client/client.h"
+#include "../rtcw/src/qcommon/qcommon.h"
 
-// EXT_texture_border_clamp
-#ifndef GL_CLAMP_TO_BORDER
-#define GL_CLAMP_TO_BORDER			0x812D
-#endif
+extern int VR_main(int argc, char *argv[]);
+extern void initialize_gl4es(void);
+qboolean VR_GetFovTangentsForEye(int eye, float *tanLeft, float *tanRight, float *tanUp, float *tanDown);
 
-#ifndef GL_TEXTURE_BORDER_COLOR
-#define GL_TEXTURE_BORDER_COLOR		0x1004
-#endif
+ovrAppThread gAppThread;
 
+cvar_t	*vr_turn_mode;
+cvar_t	*vr_turn_angle;
+cvar_t	*vr_reloadtimeoutms;
+cvar_t	*vr_positional_factor;
+cvar_t	*vr_walkdirection;
+cvar_t	*vr_movement_multiplier;
+cvar_t	*vr_weapon_pitchadjust;
+cvar_t	*vr_lasersight;
+cvar_t	*vr_control_scheme;
+cvar_t	*vr_teleport;
+cvar_t	*vr_virtual_stock;
+cvar_t	*vr_comfort_vignette;
+cvar_t	*vr_switch_sticks;
+cvar_t	*vr_cinematic_stereo;
+cvar_t	*vr_screen_dist;
+cvar_t	*vr_gesture_triggered_use;
+cvar_t	*vr_use_gesture_boundary;
+cvar_t	*vr_draw_hud;
+cvar_t	*vr_irl_crouch_enabled;
+cvar_t	*vr_irl_crouch_to_stand_ratio;
+cvar_t	*vr_haptic_intensity;
+cvar_t	*vr_menu_item_touched;
+cvar_t	*vr_refresh;
+cvar_t	*vr_spread_reduce;
 
-// Must use EGLSyncKHR because the VrApi still supports OpenGL ES 2.0
-#define EGL_SYNC
+ovrInputStateTrackedRemote leftTrackedRemoteState_old;
+ovrInputStateTrackedRemote leftTrackedRemoteState_new;
+ovrTracking leftRemoteTracking_new;
 
-#if defined EGL_SYNC
-// EGL_KHR_reusable_sync
-PFNEGLCREATESYNCKHRPROC			eglCreateSyncKHR;
-PFNEGLDESTROYSYNCKHRPROC		eglDestroySyncKHR;
-PFNEGLCLIENTWAITSYNCKHRPROC		eglClientWaitSyncKHR;
-PFNEGLSIGNALSYNCKHRPROC			eglSignalSyncKHR;
-PFNEGLGETSYNCATTRIBKHRPROC		eglGetSyncAttribKHR;
-#endif
+ovrInputStateTrackedRemote rightTrackedRemoteState_old;
+ovrInputStateTrackedRemote rightTrackedRemoteState_new;
+ovrTracking rightRemoteTracking_new;
 
-//Let's go to the maximum!
-int CPU_LEVEL			= 4;
-int GPU_LEVEL			= 4;
-int NUM_MULTI_SAMPLES	= 1;
-int REFRESH	            = 0;
-float SS_MULTIPLIER    = 0.0f;
+ovrInputStateGamepad footTrackedRemoteState_old;
+ovrInputStateGamepad footTrackedRemoteState_new;
 
-jclass clazz;
+ovrDeviceID controllerIDs[2];
 
-float radians(float deg) {
-	return (deg * M_PI) / 180.0;
-}
+float remote_movementSideways;
+float remote_movementForward;
+float remote_movementUp;
+float positional_movementSideways;
+float positional_movementForward;
+float snapTurn;
 
-float degrees(float rad) {
-	return (rad * 180.0) / M_PI;
-}
+static JavaVM *jVM;
+static jobject jniCallbackObj;
+static jmethodID android_shutdown;
+static jmethodID android_haptic_event;
+static jmethodID android_haptic_updateevent;
+static jmethodID android_haptic_stopevent;
+static jmethodID android_haptic_endframe;
+static jmethodID android_haptic_enable;
+static jmethodID android_haptic_disable;
 
-/* global arg_xxx structs */
-struct arg_dbl *ss;
-struct arg_int *cpu;
-struct arg_int *gpu;
-struct arg_int *msaa;
-struct arg_int *refresh;
-struct arg_end *end;
+static char **argv;
+static int argc;
+static long long frameIndex;
+static qboolean vrInitialised;
+static qboolean vrPreInitialised;
+static qboolean vrCvarsInitialised;
+static void *vrGlContext;
 
-char **argv;
-int argc=0;
-
-extern cvar_t	*r_lefthand;
-extern cvar_t   *cl_paused;
-
-enum control_scheme {
-	RIGHT_HANDED_DEFAULT = 0,
-	LEFT_HANDED_DEFAULT = 10,
-	WEAPON_ALIGN = 99
-};
-
-/*
-================================================================================
-
-System Clock Time in millis
-
-================================================================================
-*/
-
-double GetTimeInMilliSeconds()
+static void UnEscapeQuotes(char *arg)
 {
-	struct timespec now;
-	clock_gettime( CLOCK_MONOTONIC, &now );
-	return ( now.tv_sec * 1e9 + now.tv_nsec ) * (double)(1e-6);
+	char *last = NULL;
+	while ((last = strchr(arg, '\\')) != NULL && last[1] == '"') {
+		memmove(last, last + 1, strlen(last));
+	}
 }
 
-/*
-================================================================================
-
-LAMBDA1VR Stuff
-
-================================================================================
-*/
-
-qboolean RTCWVR_useScreenLayer()
+static int ParseCommandLine(char *cmdline, char **outArgv)
 {
-	vr.screen = (qboolean)(showingScreenLayer ||
-            (cls.state == CA_CINEMATIC) ||
-            (cls.state == CA_LOADING) ||
-            (clc.demoplaying) ||
-			(cl.cameraMode) ||
-            ( Key_GetCatcher( ) & KEYCATCH_UI ) ||
-            ( Key_GetCatcher( ) & KEYCATCH_CONSOLE ));
+	char *bufp = cmdline;
+	int outArgc = 0;
+	int lastArgc = 0;
 
+	while (*bufp) {
+		while (*bufp && ((*bufp == ' ') || (*bufp == '\t'))) {
+			*bufp++ = 0;
+		}
+		if (!*bufp) {
+			break;
+		}
+		if (*bufp == '"') {
+			bufp++;
+			if (outArgv) {
+				outArgv[outArgc] = bufp;
+			}
+			outArgc++;
+			while (*bufp && ((*bufp != '"') || (bufp[-1] == '\\'))) {
+				bufp++;
+			}
+		} else {
+			if (outArgv) {
+				outArgv[outArgc] = bufp;
+			}
+			outArgc++;
+			while (*bufp && ((*bufp != ' ') && (*bufp != '\t'))) {
+				bufp++;
+			}
+		}
+		if (*bufp) {
+			*bufp++ = 0;
+		}
+		if (outArgv && lastArgc != outArgc) {
+			UnEscapeQuotes(outArgv[lastArgc]);
+		}
+		lastArgc = outArgc;
+	}
+	if (outArgv) {
+		outArgv[outArgc] = NULL;
+	}
+	return outArgc;
+}
+
+static void *RTCWVR_AppThread(void *parm)
+{
+	(void)parm;
+	VR_main(argc, argv);
+	return NULL;
+}
+
+static void RTCWVR_InitCvars(void)
+{
+	if (vrCvarsInitialised) {
+		return;
+	}
+
+	vr_turn_mode = Cvar_Get("vr_turn_mode", "0", CVAR_ARCHIVE);
+	vr_turn_angle = Cvar_Get("vr_turn_angle", "45", CVAR_ARCHIVE);
+	vr_reloadtimeoutms = Cvar_Get("vr_reloadtimeoutms", "500", CVAR_ARCHIVE);
+	vr_positional_factor = Cvar_Get("vr_positional_factor", "1.0", CVAR_ARCHIVE);
+	vr_walkdirection = Cvar_Get("vr_walkdirection", "0", CVAR_ARCHIVE);
+	vr_movement_multiplier = Cvar_Get("vr_movement_multiplier", "1.0", CVAR_ARCHIVE);
+	vr_weapon_pitchadjust = Cvar_Get("vr_weapon_pitchadjust", "0", CVAR_ARCHIVE);
+	vr_lasersight = Cvar_Get("vr_lasersight", "0", CVAR_ARCHIVE);
+	Cvar_Set("vr_lasersight", "0");
+	vr_control_scheme = Cvar_Get("vr_control_scheme", "0", CVAR_ARCHIVE);
+	vr_teleport = Cvar_Get("vr_teleport", "0", CVAR_ARCHIVE);
+	vr_virtual_stock = Cvar_Get("vr_virtual_stock", "1", CVAR_ARCHIVE);
+	vr_comfort_vignette = Cvar_Get("vr_comfort_vignette", "0", CVAR_ARCHIVE);
+	vr_switch_sticks = Cvar_Get("vr_switch_sticks", "0", CVAR_ARCHIVE);
+	vr_cinematic_stereo = Cvar_Get("vr_cinematic_stereo", "0", CVAR_ARCHIVE);
+	vr_screen_dist = Cvar_Get("vr_screen_dist", "0", CVAR_ARCHIVE);
+	vr_gesture_triggered_use = Cvar_Get("vr_gesture_triggered_use", "0", CVAR_ARCHIVE);
+	vr_use_gesture_boundary = Cvar_Get("vr_use_gesture_boundary", "0.35", CVAR_ARCHIVE);
+	vr_draw_hud = Cvar_Get("vr_draw_hud", "1", CVAR_ARCHIVE);
+	vr_irl_crouch_enabled = Cvar_Get("vr_irl_crouch_enabled", "1", CVAR_ARCHIVE);
+	vr_irl_crouch_to_stand_ratio = Cvar_Get("vr_irl_crouch_to_stand_ratio", "0.65", CVAR_ARCHIVE);
+	vr_haptic_intensity = Cvar_Get("vr_haptic_intensity", "1.0", CVAR_ARCHIVE);
+	vr_menu_item_touched = Cvar_Get("vr_menu_item_touched", "0", 0);
+	vr_refresh = Cvar_Get("vr_refresh", "90", CVAR_ARCHIVE);
+	vr_spread_reduce = Cvar_Get("vr_spread_reduce", "1", CVAR_ARCHIVE);
+
+	vrCvarsInitialised = qtrue;
+}
+
+static JNIEnv *GetJniEnv(void)
+{
+	JNIEnv *env = NULL;
+	if (jVM != NULL && (*jVM)->GetEnv(jVM, (void **)&env, JNI_VERSION_1_4) < 0) {
+		(*jVM)->AttachCurrentThread(jVM, &env, NULL);
+	}
+	return env;
+}
+
+static qboolean RTCWVR_WaitForAndroidSurface(void)
+{
+	for (int i = 0; i < 200 && (gAppThread.NativeWindow == NULL || !gAppThread.Resumed); ++i) {
+		if ((i % 50) == 0) {
+			Com_Printf("Android VR: waiting for activity surface/resume window=%p resumed=%d\n",
+					   (void *)gAppThread.NativeWindow,
+					   gAppThread.Resumed);
+		}
+		usleep(10000);
+	}
+	return (gAppThread.NativeWindow != NULL && gAppThread.Resumed);
+}
+
+static void RTCWVR_InitSharedState(void)
+{
+	memset(&vr, 0, sizeof(vr));
+	playerHeight = 1.8f;
+	vr.right_handed = qtrue;
+	vr.menu_right_handed = qtrue;
+	vr.visible_hud = qtrue;
+}
+
+qboolean RTCWVR_PreRendererInit(void)
+{
+	Com_Printf("Android VR: RTCWVR_PreRendererInit enter pre=%d initialised=%d instance=%p window=%p resumed=%d\n",
+			   vrPreInitialised,
+			   vrInitialised,
+			   (void *)gAppState.Instance,
+			   (void *)gAppThread.NativeWindow,
+			   gAppThread.Resumed);
+	if (vrPreInitialised) {
+		if (gAppState.Instance != XR_NULL_HANDLE) {
+			Cvar_Set("r_customwidth", va("%d", (int)gAppState.Width));
+			Cvar_Set("r_customheight", va("%d", (int)gAppState.Height));
+			Cvar_Set("r_mode", "-1");
+		}
+		return (qboolean)(gAppState.Instance != XR_NULL_HANDLE);
+	}
+
+	RTCWVR_InitCvars();
+	RTCWVR_InitSharedState();
+	vrPreInitialised = qtrue;
+
+	if (!RTCWVR_WaitForAndroidSurface()) {
+		Com_Printf("Android VR: no activity surface/resume before renderer init\n");
+	}
+
+	TBXR_InitialiseOpenXR();
+	if (gAppState.Instance == XR_NULL_HANDLE) {
+		Com_Printf("Android VR: OpenXR unavailable\n");
+		return qfalse;
+	}
+
+	Cvar_Set("r_customwidth", va("%d", (int)gAppState.Width));
+	Cvar_Set("r_customheight", va("%d", (int)gAppState.Height));
+	Cvar_Set("r_mode", "-1");
+	Cvar_Set("com_maxfps", "0");
+
+	Com_Printf("Android VR: pre-renderer OpenXR resolution %dx%d\n",
+			   (int)gAppState.Width, (int)gAppState.Height);
+	return qtrue;
+}
+
+void RTCWVR_InitOnce(void)
+{
+	void *ctx;
+
+	if (!vrPreInitialised || gAppState.Instance == XR_NULL_HANDLE) {
+		Com_Printf("Android VR: RTCWVR_InitOnce skipped pre=%d instance=%p\n",
+				   vrPreInitialised,
+				   (void *)gAppState.Instance);
+		return;
+	}
+
+	ctx = TBXR_GetCurrentGLContext();
+	if (vrInitialised) {
+		if (ctx == vrGlContext) {
+			return;
+		}
+		Com_Printf("Android VR: GL context changed, rebuilding OpenXR session\n");
+		TBXR_DestroySessionForReinit();
+		vrInitialised = qfalse;
+	}
+
+	GlInitExtensions();
+	TBXR_EnterVR();
+	TBXR_InitRenderer();
+	TBXR_InitActions();
+	TBXR_WaitForSessionActive();
+
+	vrInitialised = qtrue;
+	vrGlContext = ctx;
+	Com_Printf("Android VR: OpenXR session active session=%p active=%d focused=%d\n",
+			   (void *)gAppState.Session,
+			   gAppState.SessionActive,
+			   gAppState.Focused);
+}
+
+void RTCWVR_Init(void)
+{
+	if (!vrPreInitialised) {
+		RTCWVR_PreRendererInit();
+	}
+	RTCWVR_InitOnce();
+}
+
+static qboolean VR_CalculateScreenLayer(void)
+{
+	static int frame = 0;
+	return
+		(frame++ < 100) ||
+		(clc.demoplaying) ||
+		(cls.state == CA_DISCONNECTED) ||
+		(cls.state == CA_CHALLENGING) ||
+		(cls.state == CA_CONNECTING) ||
+		(cls.state == CA_CINEMATIC) ||
+		(cls.state == CA_LOADING) ||
+		(cls.state == CA_PRIMED) ||
+		(cls.keyCatchers & KEYCATCH_UI) ||
+		(cls.keyCatchers & KEYCATCH_CONSOLE);
+}
+
+qboolean VR_UseScreenLayer(void)
+{
 	return vr.screen;
 }
 
-int runStatus = -1;
-void RTCWVR_exit(int exitCode)
+qboolean RTCWVR_useScreenLayer(void)
 {
-	runStatus = exitCode;
+	return VR_UseScreenLayer();
 }
 
-static void UnEscapeQuotes( char *arg )
+void RTCWVR_setUseScreenLayer(qboolean use)
 {
-	char *last = NULL;
-	while( *arg ) {
-		if( *arg == '"' && *last == '\\' ) {
-			char *c_curr = arg;
-			char *c_last = last;
-			while( *c_curr ) {
-				*c_last = *c_curr;
-				c_last = c_curr;
-				c_curr++;
-			}
-			*c_last = '\0';
-		}
-		last = arg;
-		arg++;
-	}
+	vr.screen = use;
+	showingScreenLayer = use;
 }
 
-static int ParseCommandLine(char *cmdline, char **argv)
+static void RTCWVR_UpdateScreenLayer(void)
 {
-	char *bufp;
-	char *lastp = NULL;
-	int argc, last_argc;
-	argc = last_argc = 0;
-	for ( bufp = cmdline; *bufp; ) {
-		while ( isspace(*bufp) ) {
-			++bufp;
-		}
-		if ( *bufp == '"' ) {
-			++bufp;
-			if ( *bufp ) {
-				if ( argv ) {
-					argv[argc] = bufp;
-				}
-				++argc;
-			}
-			while ( *bufp && ( *bufp != '"' || *lastp == '\\' ) ) {
-				lastp = bufp;
-				++bufp;
-			}
-		} else {
-			if ( *bufp ) {
-				if ( argv ) {
-					argv[argc] = bufp;
-				}
-				++argc;
-			}
-			while ( *bufp && ! isspace(*bufp) ) {
-				++bufp;
-			}
-		}
-		if ( *bufp ) {
-			if ( argv ) {
-				*bufp = '\0';
-			}
-			++bufp;
-		}
-		if( argv && last_argc != argc ) {
-			UnEscapeQuotes( argv[last_argc] );
-		}
-		last_argc = argc;
+	static qboolean lastUse = qfalse;
+	static int screenLogs = 0;
+	qboolean use = VR_CalculateScreenLayer();
+
+	RTCWVR_setUseScreenLayer(use);
+	if (use != lastUse) {
+		Com_Printf("Android VR: screen layer changed use=%d state=%d keyCatchers=%d\n",
+				   use, cls.state, cls.keyCatchers);
+		lastUse = use;
 	}
-	if ( argv ) {
-		argv[argc] = NULL;
-	}
-	return(argc);
-}
-
-/*
-================================================================================
-
-OpenGL-ES Utility Functions
-
-================================================================================
-*/
-
-typedef struct
-{
-	bool multi_view;						// GL_OVR_multiview, GL_OVR_multiview2
-	bool EXT_texture_border_clamp;			// GL_EXT_texture_border_clamp, GL_OES_texture_border_clamp
-} OpenGLExtensions_t;
-
-OpenGLExtensions_t glExtensions;
-
-static void EglInitExtensions()
-{
-#if defined EGL_SYNC
-	eglCreateSyncKHR		= (PFNEGLCREATESYNCKHRPROC)			eglGetProcAddress( "eglCreateSyncKHR" );
-	eglDestroySyncKHR		= (PFNEGLDESTROYSYNCKHRPROC)		eglGetProcAddress( "eglDestroySyncKHR" );
-	eglClientWaitSyncKHR	= (PFNEGLCLIENTWAITSYNCKHRPROC)		eglGetProcAddress( "eglClientWaitSyncKHR" );
-	eglSignalSyncKHR		= (PFNEGLSIGNALSYNCKHRPROC)			eglGetProcAddress( "eglSignalSyncKHR" );
-	eglGetSyncAttribKHR		= (PFNEGLGETSYNCATTRIBKHRPROC)		eglGetProcAddress( "eglGetSyncAttribKHR" );
-#endif
-
-	const char * allExtensions = (const char *)glGetString( GL_EXTENSIONS );
-	if ( allExtensions != NULL )
-	{
-		glExtensions.multi_view = strstr( allExtensions, "GL_OVR_multiview2" ) &&
-								  strstr( allExtensions, "GL_OVR_multiview_multisampled_render_to_texture" );
-
-		glExtensions.EXT_texture_border_clamp = false;//strstr( allExtensions, "GL_EXT_texture_border_clamp" ) ||
-												//strstr( allExtensions, "GL_OES_texture_border_clamp" );
+	if (screenLogs++ < 20 || (screenLogs % 300) == 0) {
+		Com_Printf("Android VR: screen layer state use=%d cls=%d keyCatchers=%d demo=%d cgame=%d frame=%d\n",
+				   use,
+				   cls.state,
+				   cls.keyCatchers,
+				   clc.demoplaying,
+				   cls.cgameStarted,
+				   screenLogs);
 	}
 }
 
-static const char * EglErrorString( const EGLint error )
+float VR_GetScreenLayerDistance(void)
 {
-	switch ( error )
-	{
-		case EGL_SUCCESS:				return "EGL_SUCCESS";
-		case EGL_NOT_INITIALIZED:		return "EGL_NOT_INITIALIZED";
-		case EGL_BAD_ACCESS:			return "EGL_BAD_ACCESS";
-		case EGL_BAD_ALLOC:				return "EGL_BAD_ALLOC";
-		case EGL_BAD_ATTRIBUTE:			return "EGL_BAD_ATTRIBUTE";
-		case EGL_BAD_CONTEXT:			return "EGL_BAD_CONTEXT";
-		case EGL_BAD_CONFIG:			return "EGL_BAD_CONFIG";
-		case EGL_BAD_CURRENT_SURFACE:	return "EGL_BAD_CURRENT_SURFACE";
-		case EGL_BAD_DISPLAY:			return "EGL_BAD_DISPLAY";
-		case EGL_BAD_SURFACE:			return "EGL_BAD_SURFACE";
-		case EGL_BAD_MATCH:				return "EGL_BAD_MATCH";
-		case EGL_BAD_PARAMETER:			return "EGL_BAD_PARAMETER";
-		case EGL_BAD_NATIVE_PIXMAP:		return "EGL_BAD_NATIVE_PIXMAP";
-		case EGL_BAD_NATIVE_WINDOW:		return "EGL_BAD_NATIVE_WINDOW";
-		case EGL_CONTEXT_LOST:			return "EGL_CONTEXT_LOST";
-		default:						return "unknown";
-	}
+	return 2.0f + vr_screen_dist->value;
 }
 
-static const char * GlFrameBufferStatusString( GLenum status )
+void VR_SetHMDOrientation(float pitch, float yaw, float roll)
 {
-	switch ( status )
-	{
-		case GL_FRAMEBUFFER_UNDEFINED:						return "GL_FRAMEBUFFER_UNDEFINED";
-		case GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT:			return "GL_FRAMEBUFFER_INCOMPLETE_ATTACHMENT";
-		case GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT:	return "GL_FRAMEBUFFER_INCOMPLETE_MISSING_ATTACHMENT";
-		case GL_FRAMEBUFFER_UNSUPPORTED:					return "GL_FRAMEBUFFER_UNSUPPORTED";
-		case GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE:			return "GL_FRAMEBUFFER_INCOMPLETE_MULTISAMPLE";
-		default:											return "unknown";
-	}
-}
-
-
-/*
-================================================================================
-
-ovrEgl
-
-================================================================================
-*/
-
-typedef struct
-{
-	EGLint		MajorVersion;
-	EGLint		MinorVersion;
-	EGLDisplay	Display;
-	EGLConfig	Config;
-	EGLSurface	TinySurface;
-	EGLSurface	MainSurface;
-	EGLContext	Context;
-} ovrEgl;
-
-static void ovrEgl_Clear( ovrEgl * egl )
-{
-	egl->MajorVersion = 0;
-	egl->MinorVersion = 0;
-	egl->Display = 0;
-	egl->Config = 0;
-	egl->TinySurface = EGL_NO_SURFACE;
-	egl->MainSurface = EGL_NO_SURFACE;
-	egl->Context = EGL_NO_CONTEXT;
-}
-
-static void ovrEgl_CreateContext( ovrEgl * egl, const ovrEgl * shareEgl )
-{
-	if ( egl->Display != 0 )
-	{
-		return;
-	}
-
-	egl->Display = eglGetDisplay( EGL_DEFAULT_DISPLAY );
-	ALOGV( "        eglInitialize( Display, &MajorVersion, &MinorVersion )" );
-	eglInitialize( egl->Display, &egl->MajorVersion, &egl->MinorVersion );
-	// Do NOT use eglChooseConfig, because the Android EGL code pushes in multisample
-	// flags in eglChooseConfig if the user has selected the "force 4x MSAA" option in
-	// settings, and that is completely wasted for our warp target.
-	const int MAX_CONFIGS = 1024;
-	EGLConfig configs[MAX_CONFIGS];
-	EGLint numConfigs = 0;
-	if ( eglGetConfigs( egl->Display, configs, MAX_CONFIGS, &numConfigs ) == EGL_FALSE )
-	{
-		ALOGE( "        eglGetConfigs() failed: %s", EglErrorString( eglGetError() ) );
-		return;
-	}
-	const EGLint configAttribs[] =
-	{
-		EGL_RED_SIZE,		8,
-		EGL_GREEN_SIZE,		8,
-		EGL_BLUE_SIZE,		8,
-		EGL_ALPHA_SIZE,		8, // need alpha for the multi-pass timewarp compositor
-		EGL_DEPTH_SIZE,		0,
-		EGL_STENCIL_SIZE,	0,
-		EGL_SAMPLES,		0,
-		EGL_NONE
-	};
-	egl->Config = 0;
-	for ( int i = 0; i < numConfigs; i++ )
-	{
-		EGLint value = 0;
-
-		eglGetConfigAttrib( egl->Display, configs[i], EGL_RENDERABLE_TYPE, &value );
-		if ( ( value & EGL_OPENGL_ES3_BIT_KHR ) != EGL_OPENGL_ES3_BIT_KHR )
-		{
-			continue;
-		}
-
-		// The pbuffer config also needs to be compatible with normal window rendering
-		// so it can share textures with the window context.
-		eglGetConfigAttrib( egl->Display, configs[i], EGL_SURFACE_TYPE, &value );
-		if ( ( value & ( EGL_WINDOW_BIT | EGL_PBUFFER_BIT ) ) != ( EGL_WINDOW_BIT | EGL_PBUFFER_BIT ) )
-		{
-			continue;
-		}
-
-		int	j = 0;
-		for ( ; configAttribs[j] != EGL_NONE; j += 2 )
-		{
-			eglGetConfigAttrib( egl->Display, configs[i], configAttribs[j], &value );
-			if ( value != configAttribs[j + 1] )
-			{
-				break;
-			}
-		}
-		if ( configAttribs[j] == EGL_NONE )
-		{
-			egl->Config = configs[i];
-			break;
-		}
-	}
-	if ( egl->Config == 0 )
-	{
-		ALOGE( "        eglChooseConfig() failed: %s", EglErrorString( eglGetError() ) );
-		return;
-	}
-	EGLint contextAttribs[] =
-	{
-		EGL_CONTEXT_CLIENT_VERSION, 3,
-		EGL_NONE
-	};
-	ALOGV( "        Context = eglCreateContext( Display, Config, EGL_NO_CONTEXT, contextAttribs )" );
-	egl->Context = eglCreateContext( egl->Display, egl->Config, ( shareEgl != NULL ) ? shareEgl->Context : EGL_NO_CONTEXT, contextAttribs );
-	if ( egl->Context == EGL_NO_CONTEXT )
-	{
-		ALOGE( "        eglCreateContext() failed: %s", EglErrorString( eglGetError() ) );
-		return;
-	}
-	const EGLint surfaceAttribs[] =
-	{
-		EGL_WIDTH, 16,
-		EGL_HEIGHT, 16,
-		EGL_NONE
-	};
-	ALOGV( "        TinySurface = eglCreatePbufferSurface( Display, Config, surfaceAttribs )" );
-	egl->TinySurface = eglCreatePbufferSurface( egl->Display, egl->Config, surfaceAttribs );
-	if ( egl->TinySurface == EGL_NO_SURFACE )
-	{
-		ALOGE( "        eglCreatePbufferSurface() failed: %s", EglErrorString( eglGetError() ) );
-		eglDestroyContext( egl->Display, egl->Context );
-		egl->Context = EGL_NO_CONTEXT;
-		return;
-	}
-	ALOGV( "        eglMakeCurrent( Display, TinySurface, TinySurface, Context )" );
-	if ( eglMakeCurrent( egl->Display, egl->TinySurface, egl->TinySurface, egl->Context ) == EGL_FALSE )
-	{
-		ALOGE( "        eglMakeCurrent() failed: %s", EglErrorString( eglGetError() ) );
-		eglDestroySurface( egl->Display, egl->TinySurface );
-		eglDestroyContext( egl->Display, egl->Context );
-		egl->Context = EGL_NO_CONTEXT;
-		return;
-	}
-}
-
-static void ovrEgl_DestroyContext( ovrEgl * egl )
-{
-	if ( egl->Display != 0 )
-	{
-		ALOGE( "        eglMakeCurrent( Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT )" );
-		if ( eglMakeCurrent( egl->Display, EGL_NO_SURFACE, EGL_NO_SURFACE, EGL_NO_CONTEXT ) == EGL_FALSE )
-		{
-			ALOGE( "        eglMakeCurrent() failed: %s", EglErrorString( eglGetError() ) );
-		}
-	}
-	if ( egl->Context != EGL_NO_CONTEXT )
-	{
-		ALOGE( "        eglDestroyContext( Display, Context )" );
-		if ( eglDestroyContext( egl->Display, egl->Context ) == EGL_FALSE )
-		{
-			ALOGE( "        eglDestroyContext() failed: %s", EglErrorString( eglGetError() ) );
-		}
-		egl->Context = EGL_NO_CONTEXT;
-	}
-	if ( egl->TinySurface != EGL_NO_SURFACE )
-	{
-		ALOGE( "        eglDestroySurface( Display, TinySurface )" );
-		if ( eglDestroySurface( egl->Display, egl->TinySurface ) == EGL_FALSE )
-		{
-			ALOGE( "        eglDestroySurface() failed: %s", EglErrorString( eglGetError() ) );
-		}
-		egl->TinySurface = EGL_NO_SURFACE;
-	}
-	if ( egl->Display != 0 )
-	{
-		ALOGE( "        eglTerminate( Display )" );
-		if ( eglTerminate( egl->Display ) == EGL_FALSE )
-		{
-			ALOGE( "        eglTerminate() failed: %s", EglErrorString( eglGetError() ) );
-		}
-		egl->Display = 0;
-	}
-}
-
-/*
-================================================================================
-
-ovrFramebuffer
-
-================================================================================
-*/
-
-
-static void ovrFramebuffer_Clear( ovrFramebuffer * frameBuffer )
-{
-	frameBuffer->Width = 0;
-	frameBuffer->Height = 0;
-	frameBuffer->Multisamples = 0;
-	frameBuffer->TextureSwapChainLength = 0;
-	frameBuffer->ProcessingTextureSwapChainIndex = 0;
-	frameBuffer->ReadyTextureSwapChainIndex = 0;
-	frameBuffer->ColorTextureSwapChain = NULL;
-	frameBuffer->DepthBuffers = NULL;
-	frameBuffer->FrameBuffers = NULL;
-}
-
-static bool ovrFramebuffer_Create( ovrFramebuffer * frameBuffer, const GLenum colorFormat, const int width, const int height, const int multisamples )
-{
-    LOAD_GLES2(glBindTexture);
-    LOAD_GLES2(glTexParameteri);
-    LOAD_GLES2(glGenRenderbuffers);
-    LOAD_GLES2(glBindRenderbuffer);
-    LOAD_GLES2(glRenderbufferStorage);
-    LOAD_GLES2(glGenFramebuffers);
-    LOAD_GLES2(glBindFramebuffer);
-    LOAD_GLES2(glFramebufferRenderbuffer);
-    LOAD_GLES2(glFramebufferTexture2D);
-    LOAD_GLES2(glCheckFramebufferStatus);
-
-    frameBuffer->Width = width;
-	frameBuffer->Height = height;
-	frameBuffer->Multisamples = multisamples;
-
-	frameBuffer->ColorTextureSwapChain = vrapi_CreateTextureSwapChain3( VRAPI_TEXTURE_TYPE_2D, colorFormat, frameBuffer->Width, frameBuffer->Height, 1, 3 );
-	frameBuffer->TextureSwapChainLength = vrapi_GetTextureSwapChainLength( frameBuffer->ColorTextureSwapChain );
-	frameBuffer->DepthBuffers = (GLuint *)malloc( frameBuffer->TextureSwapChainLength * sizeof( GLuint ) );
-	frameBuffer->FrameBuffers = (GLuint *)malloc( frameBuffer->TextureSwapChainLength * sizeof( GLuint ) );
-
-	PFNGLRENDERBUFFERSTORAGEMULTISAMPLEEXTPROC glRenderbufferStorageMultisampleEXT =
-		(PFNGLRENDERBUFFERSTORAGEMULTISAMPLEEXTPROC)eglGetProcAddress("glRenderbufferStorageMultisampleEXT");
-	PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEEXTPROC glFramebufferTexture2DMultisampleEXT =
-		(PFNGLFRAMEBUFFERTEXTURE2DMULTISAMPLEEXTPROC)eglGetProcAddress("glFramebufferTexture2DMultisampleEXT");
-
-	for ( int i = 0; i < frameBuffer->TextureSwapChainLength; i++ )
-	{
-		// Create the color buffer texture.
-		const GLuint colorTexture = vrapi_GetTextureSwapChainHandle( frameBuffer->ColorTextureSwapChain, i );
-		GLenum colorTextureTarget = GL_TEXTURE_2D;
-		GL( gles_glBindTexture( colorTextureTarget, colorTexture ) );
-        // Just clamp to edge. However, this requires manually clearing the border
-        // around the layer to clear the edge texels.
-        GL( gles_glTexParameteri( colorTextureTarget, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE ) );
-        GL( gles_glTexParameteri( colorTextureTarget, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE ) );
-
-		GL( gles_glTexParameteri( colorTextureTarget, GL_TEXTURE_MIN_FILTER, GL_LINEAR ) );
-		GL( gles_glTexParameteri( colorTextureTarget, GL_TEXTURE_MAG_FILTER, GL_LINEAR ) );
-		GL( gles_glBindTexture( colorTextureTarget, 0 ) );
-
-		if (multisamples > 1 && glRenderbufferStorageMultisampleEXT != NULL && glFramebufferTexture2DMultisampleEXT != NULL)
-		{
-			// Create multisampled depth buffer.
-			GL(glGenRenderbuffers(1, &frameBuffer->DepthBuffers[i]));
-			GL(glBindRenderbuffer(GL_RENDERBUFFER, frameBuffer->DepthBuffers[i]));
-			GL(glRenderbufferStorageMultisampleEXT(GL_RENDERBUFFER, multisamples, GL_DEPTH_COMPONENT24, width, height));
-			GL(glBindRenderbuffer(GL_RENDERBUFFER, 0));
-
-			// Create the frame buffer.
-			GL(glGenFramebuffers(1, &frameBuffer->FrameBuffers[i]));
-			GL(glBindFramebuffer(GL_FRAMEBUFFER, frameBuffer->FrameBuffers[i]));
-			GL(glFramebufferTexture2DMultisampleEXT(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture, 0, multisamples));
-			GL(glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, frameBuffer->DepthBuffers[i]));
-			GL(GLenum renderFramebufferStatus = glCheckFramebufferStatus(GL_FRAMEBUFFER));
-			GL(glBindFramebuffer(GL_FRAMEBUFFER, 0));
-			if (renderFramebufferStatus != GL_FRAMEBUFFER_COMPLETE)
-			{
-				ALOGE("OVRHelper::Incomplete frame buffer object: %s", GlFrameBufferStatusString(renderFramebufferStatus));
-				return false;
-			}
-		}
-		else
-		{
-			{
-				// Create depth buffer.
-				GL( gles_glGenRenderbuffers( 1, &frameBuffer->DepthBuffers[i] ) );
-				GL( gles_glBindRenderbuffer( GL_RENDERBUFFER, frameBuffer->DepthBuffers[i] ) );
-				GL( gles_glRenderbufferStorage( GL_RENDERBUFFER, GL_DEPTH_COMPONENT24, frameBuffer->Width, frameBuffer->Height ) );
-				GL( gles_glBindRenderbuffer( GL_RENDERBUFFER, 0 ) );
-
-				// Create the frame buffer.
-				GL( gles_glGenFramebuffers( 1, &frameBuffer->FrameBuffers[i] ) );
-				GL( gles_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, frameBuffer->FrameBuffers[i] ) );
-				GL( gles_glFramebufferRenderbuffer( GL_DRAW_FRAMEBUFFER, GL_DEPTH_ATTACHMENT, GL_RENDERBUFFER, frameBuffer->DepthBuffers[i] ) );
-				GL( gles_glFramebufferTexture2D( GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, colorTexture, 0 ) );
-				GL( GLenum renderFramebufferStatus = gles_glCheckFramebufferStatus( GL_DRAW_FRAMEBUFFER ) );
-				GL( gles_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, 0 ) );
-				if ( renderFramebufferStatus != GL_FRAMEBUFFER_COMPLETE )
-				{
-					ALOGE( "Incomplete frame buffer object: %s", GlFrameBufferStatusString( renderFramebufferStatus ) );
-					return false;
-				}
-			}
-		}
-	}
-
-	return true;
-}
-
-void ovrFramebuffer_Destroy( ovrFramebuffer * frameBuffer )
-{
-    LOAD_GLES2(glDeleteFramebuffers);
-    LOAD_GLES2(glDeleteRenderbuffers);
-
-	GL( gles_glDeleteFramebuffers( frameBuffer->TextureSwapChainLength, frameBuffer->FrameBuffers ) );
-	GL( gles_glDeleteRenderbuffers( frameBuffer->TextureSwapChainLength, frameBuffer->DepthBuffers ) );
-
-	vrapi_DestroyTextureSwapChain( frameBuffer->ColorTextureSwapChain );
-
-	free( frameBuffer->DepthBuffers );
-	free( frameBuffer->FrameBuffers );
-
-	ovrFramebuffer_Clear( frameBuffer );
-}
-
-void GPUWaitSync()
-{
-	GLsync syncBuff = glFenceSync(GL_SYNC_GPU_COMMANDS_COMPLETE, 0);
-	GLenum status = glClientWaitSync(syncBuff, GL_SYNC_FLUSH_COMMANDS_BIT, 1000 * 1000 * 50); // Wait for a max of 50ms...
-	if (status != GL_CONDITION_SATISFIED)
-	{
-		LOGE("Error on glClientWaitSync: %d\n", status);
-	}
-	glDeleteSync(syncBuff);
-}
-
-void ovrFramebuffer_SetCurrent( ovrFramebuffer * frameBuffer )
-{
-    LOAD_GLES2(glBindFramebuffer);
-	GL( gles_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, frameBuffer->FrameBuffers[frameBuffer->ProcessingTextureSwapChainIndex] ) );
-}
-
-void ovrFramebuffer_SetNone()
-{
-    LOAD_GLES2(glBindFramebuffer);
-	GL( gles_glBindFramebuffer( GL_DRAW_FRAMEBUFFER, 0 ) );
-}
-
-void ovrFramebuffer_Resolve( ovrFramebuffer * frameBuffer )
-{
-	// Discard the depth buffer, so the tiler won't need to write it back out to memory.
-//	const GLenum depthAttachment[1] = { GL_DEPTH_ATTACHMENT };
-//	glInvalidateFramebuffer( GL_DRAW_FRAMEBUFFER, 1, depthAttachment );
-
-    // Flush this frame worth of commands.
-    glFlush();
-}
-
-void ovrFramebuffer_Advance( ovrFramebuffer * frameBuffer )
-{
-	// Advance to the next texture from the set.
-	frameBuffer->ReadyTextureSwapChainIndex = frameBuffer->ProcessingTextureSwapChainIndex;
-	frameBuffer->ProcessingTextureSwapChainIndex = ( frameBuffer->ProcessingTextureSwapChainIndex + 1 ) % frameBuffer->TextureSwapChainLength;
-}
-
-
-void ovrFramebuffer_ClearEdgeTexels( ovrFramebuffer * frameBuffer )
-{
-	LOAD_GLES2(glEnable);
-	LOAD_GLES2(glDisable);
-	LOAD_GLES2(glViewport);
-	LOAD_GLES2(glScissor);
-	LOAD_GLES2(glClearColor);
-	LOAD_GLES2(glClear);
-
-	GL( gles_glEnable( GL_SCISSOR_TEST ) );
-	GL( gles_glViewport( 0, 0, frameBuffer->Width, frameBuffer->Height ) );
-
-	// Explicitly clear the border texels to black because OpenGL-ES does not support GL_CLAMP_TO_BORDER.
-	// Clear to fully opaque black.
-	GL( gles_glClearColor( 0.0f, 0.0f, 0.0f, 1.0f ) );
-
-	// bottom
-	GL( gles_glScissor( 0, 0, frameBuffer->Width, 1 ) );
-	GL( gles_glClear( GL_COLOR_BUFFER_BIT ) );
-	// top
-	GL( gles_glScissor( 0, frameBuffer->Height - 1, frameBuffer->Width, 1 ) );
-	GL( gles_glClear( GL_COLOR_BUFFER_BIT ) );
-	// left
-	GL( gles_glScissor( 0, 0, 1, frameBuffer->Height ) );
-	GL( gles_glClear( GL_COLOR_BUFFER_BIT ) );
-	// right
-	GL( gles_glScissor( frameBuffer->Width - 1, 0, 1, frameBuffer->Height ) );
-	GL( gles_glClear( GL_COLOR_BUFFER_BIT ) );
-
-
-	GL( gles_glScissor( 0, 0, 0, 0 ) );
-	GL( gles_glDisable( GL_SCISSOR_TEST ) );
-}
-
-
-/*
-================================================================================
-
-ovrRenderer
-
-================================================================================
-*/
-
-
-void ovrRenderer_Clear( ovrRenderer * renderer )
-{
-	for ( int eye = 0; eye < VRAPI_FRAME_LAYER_EYE_MAX; eye++ )
-	{
-		ovrFramebuffer_Clear( &renderer->FrameBuffer[eye] );
-	}
-	renderer->ProjectionMatrix = ovrMatrix4f_CreateIdentity();
-	renderer->NumBuffers = VRAPI_FRAME_LAYER_EYE_MAX;
-}
-
-
-void ovrRenderer_Create( int width, int height, ovrRenderer * renderer, const ovrJava * java )
-{
-	renderer->NumBuffers = VRAPI_FRAME_LAYER_EYE_MAX;
-
-	//Now using a symmetrical render target, based on the horizontal FOV
-    vr.fov = vrapi_GetSystemPropertyInt( java, VRAPI_SYS_PROP_SUGGESTED_EYE_FOV_DEGREES_Y);
-
-	// Create the render Textures.
-	for ( int eye = 0; eye < VRAPI_FRAME_LAYER_EYE_MAX; eye++ )
-	{
-		ovrFramebuffer_Create( &renderer->FrameBuffer[eye],
-							   GL_RGBA8,
-							   width,
-							   height,
-							   NUM_MULTI_SAMPLES );
-	}
-
-	// Setup the projection matrix.
-	renderer->ProjectionMatrix = ovrMatrix4f_CreateProjectionFov(
-			vr.fov, vr.fov, 0.0f, 0.0f, 1.0f, 0.0f );
-
-}
-
-void ovrRenderer_Destroy( ovrRenderer * renderer )
-{
-	for ( int eye = 0; eye < renderer->NumBuffers; eye++ )
-	{
-		ovrFramebuffer_Destroy( &renderer->FrameBuffer[eye] );
-	}
-	renderer->ProjectionMatrix = ovrMatrix4f_CreateIdentity();
-}
-
-
-#ifndef EPSILON
-#define EPSILON 0.001f
-#endif
-
-static ovrVector3f normalizeVec(ovrVector3f vec) {
-    //NOTE: leave w-component untouched
-    //@@const float EPSILON = 0.000001f;
-    float xxyyzz = vec.x*vec.x + vec.y*vec.y + vec.z*vec.z;
-    //@@if(xxyyzz < EPSILON)
-    //@@    return *this; // do nothing if it is zero vector
-
-    //float invLength = invSqrt(xxyyzz);
-    ovrVector3f result;
-    float invLength = 1.0f / sqrtf(xxyyzz);
-    result.x = vec.x * invLength;
-    result.y = vec.y * invLength;
-    result.z = vec.z * invLength;
-    return result;
-}
-
-void NormalizeAngles(vec3_t angles)
-{
-	while (angles[0] >= 90) angles[0] -= 180;
-	while (angles[1] >= 180) angles[1] -= 360;
-	while (angles[2] >= 180) angles[2] -= 360;
-	while (angles[0] < -90) angles[0] += 180;
-	while (angles[1] < -180) angles[1] += 360;
-	while (angles[2] < -180) angles[2] += 360;
-}
-
-void GetAnglesFromVectors(const ovrVector3f forward, const ovrVector3f right, const ovrVector3f up, vec3_t angles)
-{
-	float sr, sp, sy, cr, cp, cy;
-
-	sp = -forward.z;
-
-	float cp_x_cy = forward.x;
-	float cp_x_sy = forward.y;
-	float cp_x_sr = -right.z;
-	float cp_x_cr = up.z;
-
-	float yaw = atan2(cp_x_sy, cp_x_cy);
-	float roll = atan2(cp_x_sr, cp_x_cr);
-
-	cy = cos(yaw);
-	sy = sin(yaw);
-	cr = cos(roll);
-	sr = sin(roll);
-
-	if (fabs(cy) > EPSILON)
-	{
-	cp = cp_x_cy / cy;
-	}
-	else if (fabs(sy) > EPSILON)
-	{
-	cp = cp_x_sy / sy;
-	}
-	else if (fabs(sr) > EPSILON)
-	{
-	cp = cp_x_sr / sr;
-	}
-	else if (fabs(cr) > EPSILON)
-	{
-	cp = cp_x_cr / cr;
-	}
-	else
-	{
-	cp = cos(asin(sp));
-	}
-
-	float pitch = atan2(sp, cp);
-
-	angles[0] = pitch / (M_PI*2.f / 360.f);
-	angles[1] = yaw / (M_PI*2.f / 360.f);
-	angles[2] = roll / (M_PI*2.f / 360.f);
-
-	NormalizeAngles(angles);
-}
-
-
-void QuatToYawPitchRoll(ovrQuatf q, vec3_t rotation, vec3_t out) {
-
-    ovrMatrix4f mat = ovrMatrix4f_CreateFromQuaternion( &q );
-
-    if (rotation[0] != 0.0f || rotation[1] != 0.0f || rotation[2] != 0.0f)
-    {
-        ovrMatrix4f rot = ovrMatrix4f_CreateRotation(radians(rotation[0]), radians(rotation[1]), radians(rotation[2]));
-        mat = ovrMatrix4f_Multiply(&mat, &rot);
-    }
-
-    ovrVector4f v1 = {0, 0, -1, 0};
-    ovrVector4f v2 = {1, 0, 0, 0};
-    ovrVector4f v3 = {0, 1, 0, 0};
-
-    ovrVector4f forwardInVRSpace = ovrVector4f_MultiplyMatrix4f(&mat, &v1);
-    ovrVector4f rightInVRSpace = ovrVector4f_MultiplyMatrix4f(&mat, &v2);
-    ovrVector4f upInVRSpace = ovrVector4f_MultiplyMatrix4f(&mat, &v3);
-
-    ovrVector3f forward = {-forwardInVRSpace.z, -forwardInVRSpace.x, forwardInVRSpace.y};
-    ovrVector3f right = {-rightInVRSpace.z, -rightInVRSpace.x, rightInVRSpace.y};
-    ovrVector3f up = {-upInVRSpace.z, -upInVRSpace.x, upInVRSpace.y};
-
-    ovrVector3f forwardNormal = normalizeVec(forward);
-    ovrVector3f rightNormal = normalizeVec(right);
-    ovrVector3f upNormal = normalizeVec(up);
-
-    GetAnglesFromVectors(forwardNormal, rightNormal, upNormal, out);
-    return;
-}
-
-void updateHMDOrientation()
-{
-	//Position
-    VectorSubtract(vr.hmdposition_last, vr.hmdposition, vr.hmdposition_delta);
-
-    //Keep this for our records
-    VectorCopy(vr.hmdposition, vr.hmdposition_last);
-
-	//Orientation
+	VectorSet(vr.hmdorientation, pitch, yaw, roll);
 	VectorSubtract(vr.hmdorientation_last, vr.hmdorientation, vr.hmdorientation_delta);
-
-	//Keep this for our records
 	VectorCopy(vr.hmdorientation, vr.hmdorientation_last);
 
-	// View yaw delta
 	float clientview_yaw = vr.clientviewangles[YAW] - vr.hmdorientation[YAW];
 	vr.clientview_yaw_delta = vr.clientview_yaw_last - clientview_yaw;
 	vr.clientview_yaw_last = clientview_yaw;
 }
 
-void setHMDPosition( float x, float y, float z )
+void VR_SetHMDPosition(float x, float y, float z)
 {
 	static qboolean s_useScreen = qfalse;
+	static int frame = 0;
 
 	VectorSet(vr.hmdposition, x, y, z);
 
-    if (s_useScreen != RTCWVR_useScreenLayer())
-    {
-		s_useScreen = RTCWVR_useScreenLayer();
-
-		//Record player height on transition
-        playerHeight = y;
-
-        //Resync yaw on transition
-        RTCWVR_ResyncClientYawWithGameYaw();
-    }
-
-	if (!RTCWVR_useScreenLayer())
-    {
-    	playerYaw = vr.hmdorientation[YAW];
+	qboolean useScreen = VR_UseScreenLayer();
+	if ((s_useScreen != useScreen) || (frame++ < 100)) {
+		s_useScreen = useScreen;
+		VectorSet(vr.hmdposition_snap, x, y, z);
+		VectorCopy(vr.hmdorientation, vr.hmdorientation_snap);
 	}
+
+	VectorSubtract(vr.hmdposition, vr.hmdposition_snap, vr.hmdposition_offset);
+	VectorSubtract(vr.hmdposition_last, vr.hmdposition, vr.hmdposition_delta);
+	VectorCopy(vr.hmdposition, vr.hmdposition_last);
+
+	if (!vr.maxHeight || vr.maxHeight < 1.0f) {
+		vr.maxHeight = vr.hmdposition[1];
+	}
+	vr.curHeight = vr.hmdposition[1];
 }
 
-qboolean isMultiplayer()
+qboolean VR_GetFovTangents(float *tanLeft, float *tanRight, float *tanUp, float *tanDown)
 {
-	return Cvar_VariableValue("maxclients") > 1;
+	return VR_GetFovTangentsForEye(vr.eye, tanLeft, tanRight, tanUp, tanDown);
 }
 
-
-/*
-========================
-RTCWVR_Vibrate
-========================
-*/
-
-//0 = left, 1 = right
-float vibration_channel_duration[2] = {0.0f, 0.0f};
-float vibration_channel_intensity[2] = {0.0f, 0.0f};
-
-void RTCWVR_Vibrate( int duration, int channel, float intensity )
+qboolean VR_GetFovTangentsForEye(int eye, float *tanLeft, float *tanRight, float *tanUp, float *tanDown)
 {
-	if (vibration_channel_duration[channel] > 0.0f)
-		return;
-
-	if (vibration_channel_duration[channel] == -1.0f &&	duration != 0.0f)
-		return;
-
-	vibration_channel_duration[channel] = duration;
-	vibration_channel_intensity[channel] = intensity * vr_haptic_intensity->value;
+	if (!gAppState.SessionActive || gAppState.Views == NULL) {
+		return qfalse;
+	}
+	if (eye < 0) {
+		XrFovf left = gAppState.Views[0].fov;
+		XrFovf right = gAppState.Views[1].fov;
+		*tanLeft = fminf(tanf(left.angleLeft), tanf(right.angleLeft));
+		*tanRight = fmaxf(tanf(left.angleRight), tanf(right.angleRight));
+		*tanUp = fmaxf(tanf(left.angleUp), tanf(right.angleUp));
+		*tanDown = fminf(tanf(left.angleDown), tanf(right.angleDown));
+		return qtrue;
+	}
+	if (eye < 0 || eye > 1) {
+		eye = vr.eye;
+	}
+	XrFovf fov = gAppState.Views[eye].fov;
+	*tanLeft = tanf(fov.angleLeft);
+	*tanRight = tanf(fov.angleRight);
+	*tanUp = tanf(fov.angleUp);
+	*tanDown = tanf(fov.angleDown);
+	return qtrue;
 }
 
-void RTCWVR_Haptic( int duration, int channel, float intensity, char *description, float yaw, float height  )
+float VR_GetEyeStereoSeparation(int eye)
 {
-    if(strstr(description,"camera_shake") == NULL && strstr(description,"ignore") == NULL && strstr(description,"dead_") == NULL)
-        Com_Printf("GBRTCW: Vibrate Description: %s (Yaw: %f Pitch: %f)", description, yaw, height);
+	XrVector3f *l;
+	XrVector3f *r;
+	float dx, dy, dz;
+	float ipd;
 
-	if(strcmp(description,"player_dead") == 0) {
-		RTCWVR_HapticEvent("player_dead", 0, 0, 100.0f * intensity, yaw, height);
+	if (!gAppState.SessionActive || gAppState.Views == NULL) {
+		return 0.0f;
 	}
-    else if(strcmp(description,"door_kick") == 0) {
-		RTCWVR_HapticEvent("kick_door", 0, 0, 100.0f * intensity, yaw, height);
-	}
-    else if(strcmp(description,"weapon_reload") == 0) {
-        RTCWVR_HapticEvent("weapon_reload", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-    }
-	else if(strcmp(description,"door_open") == 0) {
-		// Replaced by "use trigger" haptics
-		// RTCWVR_HapticEvent("open_door", 0, 0, 100.0f * intensity, yaw, height);
-	}
-    else if(strcmp(description,"alarm_on") == 0) {
-		// Replaced by "use trigger" haptics
-		// RTCWVR_HapticEvent("heartbeat", 0, 0, 100.0f * intensity, yaw, height);
-    }
-    else if(strcmp(description,"end_alarm") == 0) {
-		// Replaced by "use trigger" haptics
-		// RTCWVR_HapticStopEvent("heartbeat");
-	}
-	else if(strcmp(description,"use_trigger") == 0) {
-		RTCWVR_HapticEvent("use_trigger", channel == 1 ? 2 : 1, 0, 100.0f * intensity, yaw, height);
-	}
-	else if(strcmp(description,"switch_weapon") == 0 || strcmp(description,"pickup_item") == 0) {
-		RTCWVR_HapticEvent(description, channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-	}
-    else if(strcmp(description,"give_armor") == 0 || strcmp(description,"give_food") == 0 ||
-    		strcmp(description,"give_drink") == 0 || strcmp(description,"give_health") == 0 || strcmp(description,"pickup_treasure") == 0) {
-        RTCWVR_HapticEvent(description, 0, 0, 100.0f * intensity, yaw, height);
-    }
-    else if(strstr(description,"damage_") != NULL) {
-        RTCWVR_HapticEvent(description, 0, 0, 100.0f * intensity, yaw, height);
-    }
-    else if(strstr(description,"stop_firing_") != NULL) {
-        /*
-    	if(strcmp(description,"stop_firing_9") == 0 || strcmp(description,"stop_firing_flames") == 0) {
-            RTCWVR_HapticStopEvent("fire_flamethrower");
-        }*/
-    }
-    else if(strstr(description,"fire_") != NULL) {
-        if(strcmp(description,"fire_11") == 0 || strcmp(description,"fire_2") == 0) {
-            RTCWVR_HapticEvent("fire_pistol", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-        }
-		else if(strcmp(description,"fire_3") == 0) {
-			RTCWVR_HapticEvent("fire_mp40", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_4") == 0) {
-			RTCWVR_HapticEvent("fire_mauser", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_5") == 0 || strcmp(description,"fire_17") == 0) {
-			RTCWVR_HapticEvent("fire_fg42", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_6") == 0) {
-			RTCWVR_HapticEvent("fire_grenadelauncher", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_7") == 0 || strcmp(description,"fire_rocket") == 0) {
-			RTCWVR_HapticEvent("fire_panzerfaust", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_8") == 0) {
-			RTCWVR_HapticEvent("fire_venom", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_9") == 0 || strcmp(description,"fire_flames") == 0) {
-			RTCWVR_HapticEvent("fire_flamethrower", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_10") == 0 || strcmp(description,"fire_tesla") == 0) {
-			RTCWVR_HapticEvent("fire_tesla", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_12") == 0) {
-			RTCWVR_HapticEvent("fire_thompson", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_13") == 0) {
-			RTCWVR_HapticEvent("fire_garand", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_14") == 0) {
-			RTCWVR_HapticEvent("fire_grenade", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_15") == 0) {
-			RTCWVR_HapticEvent("fire_sniper", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_16") == 0) {
-			RTCWVR_HapticEvent("fire_snooperscope", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_18") == 0) {
-			RTCWVR_HapticEvent("fire_sten", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_19") == 0) {
-			RTCWVR_HapticEvent("fire_silencer", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-		}
-		else if(strcmp(description,"fire_20") == 0) {
-			//Plays on 0 position (Vest) (not left or right)
-			RTCWVR_HapticEvent("fire_akimbo", 0, 0, 100.0f * intensity, 0, 0);
-		}
-    }
-    else if(strcmp(description,"knife_hit") == 0) {
-        RTCWVR_HapticEvent("knife_hit", channel == 1 ? 2 : 1, 0, 100.0f * intensity, 0, 0);
-    }
-    else if(strcmp(description,"camera_shake_left") == 0) {
-        RTCWVR_HapticEvent("rumble_front", 0, 0, 100.0f * intensity, yaw, height);
-    }
-    else if(strcmp(description,"camera_shake_right") == 0) {
-        RTCWVR_HapticEvent("rumble_back", 0, 0, 100.0f * intensity, yaw, height);
-    }
-    else {
-		if(strstr(description,"ignore") == NULL &&
-		   strstr(description,"dead") == NULL)
-    		Com_Printf("Missing Haptic: %s", description);
-    }
+
+	l = &gAppState.Views[0].pose.position;
+	r = &gAppState.Views[1].pose.position;
+	dx = r->x - l->x;
+	dy = r->y - l->y;
+	dz = r->z - l->z;
+	ipd = sqrtf(dx * dx + dy * dy + dz * dz);
+
+	return (eye == 0) ? (ipd * 0.5f) : -(ipd * 0.5f);
 }
 
-void jni_haptic_event(const char* event, int position, int flags, int intensity, float angle, float yHeight);
-void jni_haptic_updateevent(const char* event, int intensity, float angle);
-void jni_haptic_stopevent(const char* event);
-void jni_haptic_endframe();
-void jni_haptic_enable();
-void jni_haptic_disable();
-
-void RTCWVR_HapticEvent(const char* event, int position, int flags, int intensity, float angle, float yHeight )
+void VR_FrameSetup(void)
 {
-    //Com_Printf( "GBRTCW: Vibrate Event Fired: %s", event );
-    jni_haptic_event(event, position, flags, intensity, angle, yHeight);
+	vr.fov = gAppState.Views ? (fabsf(gAppState.Views[0].fov.angleUp) + fabsf(gAppState.Views[0].fov.angleDown)) * 180.0f / (float)M_PI : 90.0f;
 }
 
-void RTCWVR_HapticUpdateEvent(const char* event, int intensity, float angle )
+void VR_HandleControllerInput(void)
 {
-    jni_haptic_updateevent(event, intensity, angle);
+	acquireTrackedRemotesData(TBXR_GetTimeInMilliSeconds());
+	HandleInput_Default(&footTrackedRemoteState_new, &footTrackedRemoteState_old,
+		vr.right_handed ? &rightTrackedRemoteState_new : &leftTrackedRemoteState_new,
+		vr.right_handed ? &rightTrackedRemoteState_old : &leftTrackedRemoteState_old,
+		vr.right_handed ? &rightRemoteTracking_new : &leftRemoteTracking_new,
+		vr.right_handed ? &leftTrackedRemoteState_new : &rightTrackedRemoteState_new,
+		vr.right_handed ? &leftTrackedRemoteState_old : &rightTrackedRemoteState_old,
+		vr.right_handed ? &leftRemoteTracking_new : &rightRemoteTracking_new,
+		ovrButton_A, ovrButton_B, ovrButton_X, ovrButton_Y);
+
+	leftTrackedRemoteState_old = leftTrackedRemoteState_new;
+	rightTrackedRemoteState_old = rightTrackedRemoteState_new;
+	footTrackedRemoteState_old = footTrackedRemoteState_new;
 }
 
-void RTCWVR_HapticEndFrame()
+void RTCWVR_FrameSetup(void)
 {
-    jni_haptic_endframe();
+	RTCWVR_InitOnce();
+	RTCWVR_UpdateScreenLayer();
+	TBXR_FrameSetup();
 }
 
-void RTCWVR_HapticStopEvent(const char* event)
+qboolean RTCWVR_processMessageQueue(void)
 {
-    jni_haptic_stopevent(event);
+	return qtrue;
 }
 
-void RTCWVR_HapticEnable()
+void RTCWVR_getHMDOrientation(void)
 {
-	static bool firstTime = true;
-	if (firstTime) {
-		jni_haptic_enable();
-		firstTime = false;
-		jni_haptic_event("fire_pistol", 0, 0, 100, 0, 0);
-	}
 }
 
-void RTCWVR_HapticDisable()
+void RTCWVR_getTrackedRemotesOrientation(void)
 {
-    jni_haptic_disable();
+	acquireTrackedRemotesData(TBXR_GetTimeInMilliSeconds());
 }
 
-void RTCWVR_GetMove(float *forward, float *side, float *pos_forward, float *pos_side, float *up,
-                    float *yaw, float *pitch, float *roll)
+void RTCWVR_processHaptics(void)
 {
-    *forward = remote_movementForward;
-    *pos_forward = positional_movementForward;
-    *up = remote_movementUp;
-    *side = remote_movementSideways;
-    *pos_side = positional_movementSideways;
-	*yaw = vr.hmdorientation[YAW] + snapTurn;
-	*pitch = vr.hmdorientation[PITCH];
-	*roll = vr.hmdorientation[ROLL];
+	TBXR_ProcessHaptics();
 }
 
-/*
-================================================================================
-
-ovrRenderThread
-
-================================================================================
-*/
-
-
-/*
-================================================================================
-
-ovrApp
-
-================================================================================
-*/
-
-typedef struct
+void RTCWVR_prepareEyeBuffer(int eye)
 {
-	ovrJava				Java;
-	ovrEgl				Egl;
-	ANativeWindow *		NativeWindow;
-	bool				Resumed;
-	ovrMobile *			Ovr;
-    ovrScene			Scene;
-	long long			FrameIndex;
-	double 				DisplayTime;
-	int					SwapInterval;
-	int					CpuLevel;
-	int					GpuLevel;
-	int					MainThreadTid;
-	int					RenderThreadTid;
-	ovrLayer_Union2		Layers[ovrMaxLayerCount];
-	int					LayerCount;
-	ovrRenderer			Renderer;
-} ovrApp;
-
-static void ovrApp_Clear( ovrApp * app )
-{
-	app->Java.Vm = NULL;
-	app->Java.Env = NULL;
-	app->Java.ActivityObject = NULL;
-	app->Ovr = NULL;
-	app->FrameIndex = 1;
-	app->DisplayTime = 0;
-	app->SwapInterval = 1;
-	app->CpuLevel = 3;
-	app->GpuLevel = 3;
-	app->MainThreadTid = 0;
-	app->RenderThreadTid = 0;
-
-	ovrEgl_Clear( &app->Egl );
-
-	ovrScene_Clear( &app->Scene );
-	ovrRenderer_Clear( &app->Renderer );
+	TBXR_prepareEyeBuffer(eye);
 }
 
-static void ovrApp_PushBlackFinal( ovrApp * app )
+void RTCWVR_finishEyeBuffer(int eye)
 {
-	int frameFlags = 0;
-	frameFlags |= VRAPI_FRAME_FLAG_FLUSH | VRAPI_FRAME_FLAG_FINAL;
-
-	ovrLayerProjection2 layer = vrapi_DefaultLayerBlackProjection2();
-	layer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_INHIBIT_SRGB_FRAMEBUFFER;
-
-	const ovrLayerHeader2 * layers[] =
-	{
-		&layer.Header
-	};
-
-	ovrSubmitFrameDescription2 frameDesc = {};
-	frameDesc.Flags = frameFlags;
-	frameDesc.SwapInterval = 1;
-	frameDesc.FrameIndex = app->FrameIndex;
-	frameDesc.DisplayTime = app->DisplayTime;
-	frameDesc.LayerCount = 1;
-	frameDesc.Layers = layers;
-
-	vrapi_SubmitFrame2( app->Ovr, &frameDesc );
+	TBXR_finishEyeBuffer(eye);
 }
 
-static void ovrApp_HandleVrModeChanges( ovrApp * app )
+void RTCWVR_submitFrame(void)
 {
-	if ( app->Resumed != false && app->NativeWindow != NULL )
-	{
-		if ( app->Ovr == NULL )
-		{
-			ovrModeParms parms = vrapi_DefaultModeParms( &app->Java );
-			// Must reset the FLAG_FULLSCREEN window flag when using a SurfaceView
-			parms.Flags |= VRAPI_MODE_FLAG_RESET_WINDOW_FULLSCREEN;
-
-			parms.Flags |= VRAPI_MODE_FLAG_NATIVE_WINDOW;
-			parms.Display = (size_t)app->Egl.Display;
-			parms.WindowSurface = (size_t)app->NativeWindow;
-			parms.ShareContext = (size_t)app->Egl.Context;
-
-			ALOGV( "        eglGetCurrentSurface( EGL_DRAW ) = %p", eglGetCurrentSurface( EGL_DRAW ) );
-
-			ALOGV( "        vrapi_EnterVrMode()" );
-
-			app->Ovr = vrapi_EnterVrMode( &parms );
-
-			ALOGV( "        eglGetCurrentSurface( EGL_DRAW ) = %p", eglGetCurrentSurface( EGL_DRAW ) );
-
-			// If entering VR mode failed then the ANativeWindow was not valid.
-			if ( app->Ovr == NULL )
-			{
-				ALOGE( "Invalid ANativeWindow!" );
-				app->NativeWindow = NULL;
-			}
-
-			// Set performance parameters once we have entered VR mode and have a valid ovrMobile.
-			if ( app->Ovr != NULL )
-			{
-                //AmmarkoV : Set our refresh rate..!
-                ovrResult result = vrapi_SetDisplayRefreshRate(app->Ovr, REFRESH);
-                if (result == ovrSuccess) { ALOGV("Changed refresh rate. %f Hz", REFRESH); } else
-                { ALOGV("Failed to change refresh rate to 90Hz Result=%d",result); }
-
-                vrapi_SetClockLevels( app->Ovr, app->CpuLevel, app->GpuLevel );
-				ALOGV( "		vrapi_SetClockLevels( %d, %d )", app->CpuLevel, app->GpuLevel );
-
-                 vrapi_SetExtraLatencyMode(app->Ovr, VRAPI_EXTRA_LATENCY_MODE_ON);
-				ALOGV( "		vrapi_SetExtraLatencyMode( %d )", VRAPI_EXTRA_LATENCY_MODE_ON );
-
-				vrapi_SetPerfThread( app->Ovr, VRAPI_PERF_THREAD_TYPE_MAIN, app->MainThreadTid );
-
-				ALOGV( "		vrapi_SetPerfThread( MAIN, %d )", app->MainThreadTid );
-
-				vrapi_SetPerfThread( app->Ovr, VRAPI_PERF_THREAD_TYPE_RENDERER, app->RenderThreadTid );
-
-				ALOGV( "		vrapi_SetPerfThread( RENDERER, %d )", app->RenderThreadTid );
-			}
-		}
-	}
-	else
-	{
-		if ( app->Ovr != NULL )
-		{
-			ALOGV( "        eglGetCurrentSurface( EGL_DRAW ) = %p", eglGetCurrentSurface( EGL_DRAW ) );
-
-			ALOGV( "        vrapi_LeaveVrMode()" );
-
-			vrapi_LeaveVrMode( app->Ovr );
-			app->Ovr = NULL;
-
-			ALOGV( "        eglGetCurrentSurface( EGL_DRAW ) = %p", eglGetCurrentSurface( EGL_DRAW ) );
-		}
-	}
+	TBXR_submitFrame();
+	frameIndex++;
 }
 
-
-/*
-================================================================================
-
-ovrMessageQueue
-
-================================================================================
-*/
-
-typedef enum
+long long RTCWVR_getFrameIndex(void)
 {
-	MQ_WAIT_NONE,		// don't wait
-	MQ_WAIT_RECEIVED,	// wait until the consumer thread has received the message
-	MQ_WAIT_PROCESSED	// wait until the consumer thread has processed the message
-} ovrMQWait;
-
-#define MAX_MESSAGE_PARMS	8
-#define MAX_MESSAGES		1024
-
-typedef struct
-{
-	int			Id;
-	ovrMQWait	Wait;
-	long long	Parms[MAX_MESSAGE_PARMS];
-} ovrMessage;
-
-static void ovrMessage_Init( ovrMessage * message, const int id, const int wait )
-{
-	message->Id = id;
-	message->Wait = wait;
-	memset( message->Parms, 0, sizeof( message->Parms ) );
+	return frameIndex;
 }
 
-static void		ovrMessage_SetPointerParm( ovrMessage * message, int index, void * ptr ) { *(void **)&message->Parms[index] = ptr; }
-static void *	ovrMessage_GetPointerParm( ovrMessage * message, int index ) { return *(void **)&message->Parms[index]; }
-static void		ovrMessage_SetIntegerParm( ovrMessage * message, int index, int value ) { message->Parms[index] = value; }
-static int		ovrMessage_GetIntegerParm( ovrMessage * message, int index ) { return (int)message->Parms[index]; }
-static void		ovrMessage_SetFloatParm( ovrMessage * message, int index, float value ) { *(float *)&message->Parms[index] = value; }
-static float	ovrMessage_GetFloatParm( ovrMessage * message, int index ) { return *(float *)&message->Parms[index]; }
-
-// Cyclic queue with messages.
-typedef struct
+void RTCWVR_incrementFrameIndex(void)
 {
-	ovrMessage	 		Messages[MAX_MESSAGES];
-	volatile int		Head;	// dequeue at the head
-	volatile int		Tail;	// enqueue at the tail
-	ovrMQWait			Wait;
-	volatile bool		EnabledFlag;
-	volatile bool		PostedFlag;
-	volatile bool		ReceivedFlag;
-	volatile bool		ProcessedFlag;
-	pthread_mutex_t		Mutex;
-	pthread_cond_t		PostedCondition;
-	pthread_cond_t		ReceivedCondition;
-	pthread_cond_t		ProcessedCondition;
-} ovrMessageQueue;
-
-static void ovrMessageQueue_Create( ovrMessageQueue * messageQueue )
-{
-	messageQueue->Head = 0;
-	messageQueue->Tail = 0;
-	messageQueue->Wait = MQ_WAIT_NONE;
-	messageQueue->EnabledFlag = false;
-	messageQueue->PostedFlag = false;
-	messageQueue->ReceivedFlag = false;
-	messageQueue->ProcessedFlag = false;
-
-	pthread_mutexattr_t	attr;
-	pthread_mutexattr_init( &attr );
-	pthread_mutexattr_settype( &attr, PTHREAD_MUTEX_ERRORCHECK );
-	pthread_mutex_init( &messageQueue->Mutex, &attr );
-	pthread_mutexattr_destroy( &attr );
-	pthread_cond_init( &messageQueue->PostedCondition, NULL );
-	pthread_cond_init( &messageQueue->ReceivedCondition, NULL );
-	pthread_cond_init( &messageQueue->ProcessedCondition, NULL );
+	frameIndex++;
 }
-
-static void ovrMessageQueue_Destroy( ovrMessageQueue * messageQueue )
-{
-	pthread_mutex_destroy( &messageQueue->Mutex );
-	pthread_cond_destroy( &messageQueue->PostedCondition );
-	pthread_cond_destroy( &messageQueue->ReceivedCondition );
-	pthread_cond_destroy( &messageQueue->ProcessedCondition );
-}
-
-static void ovrMessageQueue_Enable( ovrMessageQueue * messageQueue, const bool set )
-{
-	messageQueue->EnabledFlag = set;
-}
-
-static void ovrMessageQueue_PostMessage( ovrMessageQueue * messageQueue, const ovrMessage * message )
-{
-	if ( !messageQueue->EnabledFlag )
-	{
-		return;
-	}
-	while ( messageQueue->Tail - messageQueue->Head >= MAX_MESSAGES )
-	{
-		usleep( 1000 );
-	}
-	pthread_mutex_lock( &messageQueue->Mutex );
-	messageQueue->Messages[messageQueue->Tail & ( MAX_MESSAGES - 1 )] = *message;
-	messageQueue->Tail++;
-	messageQueue->PostedFlag = true;
-	pthread_cond_broadcast( &messageQueue->PostedCondition );
-	if ( message->Wait == MQ_WAIT_RECEIVED )
-	{
-		while ( !messageQueue->ReceivedFlag )
-		{
-			pthread_cond_wait( &messageQueue->ReceivedCondition, &messageQueue->Mutex );
-		}
-		messageQueue->ReceivedFlag = false;
-	}
-	else if ( message->Wait == MQ_WAIT_PROCESSED )
-	{
-		while ( !messageQueue->ProcessedFlag )
-		{
-			pthread_cond_wait( &messageQueue->ProcessedCondition, &messageQueue->Mutex );
-		}
-		messageQueue->ProcessedFlag = false;
-	}
-	pthread_mutex_unlock( &messageQueue->Mutex );
-}
-
-static void ovrMessageQueue_SleepUntilMessage( ovrMessageQueue * messageQueue )
-{
-	if ( messageQueue->Wait == MQ_WAIT_PROCESSED )
-	{
-		messageQueue->ProcessedFlag = true;
-		pthread_cond_broadcast( &messageQueue->ProcessedCondition );
-		messageQueue->Wait = MQ_WAIT_NONE;
-	}
-	pthread_mutex_lock( &messageQueue->Mutex );
-	if ( messageQueue->Tail > messageQueue->Head )
-	{
-		pthread_mutex_unlock( &messageQueue->Mutex );
-		return;
-	}
-	while ( !messageQueue->PostedFlag )
-	{
-		pthread_cond_wait( &messageQueue->PostedCondition, &messageQueue->Mutex );
-	}
-	messageQueue->PostedFlag = false;
-	pthread_mutex_unlock( &messageQueue->Mutex );
-}
-
-static bool ovrMessageQueue_GetNextMessage( ovrMessageQueue * messageQueue, ovrMessage * message, bool waitForMessages )
-{
-	if ( messageQueue->Wait == MQ_WAIT_PROCESSED )
-	{
-		messageQueue->ProcessedFlag = true;
-		pthread_cond_broadcast( &messageQueue->ProcessedCondition );
-		messageQueue->Wait = MQ_WAIT_NONE;
-	}
-	if ( waitForMessages )
-	{
-		ovrMessageQueue_SleepUntilMessage( messageQueue );
-	}
-	pthread_mutex_lock( &messageQueue->Mutex );
-	if ( messageQueue->Tail <= messageQueue->Head )
-	{
-		pthread_mutex_unlock( &messageQueue->Mutex );
-		return false;
-	}
-	*message = messageQueue->Messages[messageQueue->Head & ( MAX_MESSAGES - 1 )];
-	messageQueue->Head++;
-	pthread_mutex_unlock( &messageQueue->Mutex );
-	if ( message->Wait == MQ_WAIT_RECEIVED )
-	{
-		messageQueue->ReceivedFlag = true;
-		pthread_cond_broadcast( &messageQueue->ReceivedCondition );
-	}
-	else if ( message->Wait == MQ_WAIT_PROCESSED )
-	{
-		messageQueue->Wait = MQ_WAIT_PROCESSED;
-	}
-	return true;
-}
-
-/*
-================================================================================
-
-ovrAppThread
-
-================================================================================
-*/
-
-enum
-{
-	MESSAGE_ON_CREATE,
-	MESSAGE_ON_START,
-	MESSAGE_ON_RESUME,
-	MESSAGE_ON_PAUSE,
-	MESSAGE_ON_STOP,
-	MESSAGE_ON_DESTROY,
-	MESSAGE_ON_SURFACE_CREATED,
-	MESSAGE_ON_SURFACE_DESTROYED
-};
-
-typedef struct
-{
-	JavaVM *		JavaVm;
-	jobject			ActivityObject;
-	jclass          ActivityClass;
-	pthread_t		Thread;
-	ovrMessageQueue	MessageQueue;
-	ANativeWindow * NativeWindow;
-} ovrAppThread;
-
-long shutdownCountdown;
-
-int m_width;
-int m_height;
-
-qboolean R_SetMode( void );
 
 void RTCWVR_GetScreenRes(int *width, int *height)
 {
-    *width = m_width;
-    *height = m_height;
+	TBXR_GetScreenRes(width, height);
 }
 
-void Android_MessageBox(const char *title, const char *text)
+int GetRefresh(void)
 {
-    ALOGE("%s %s", title, text);
+	return TBXR_GetRefresh();
 }
 
-void initialize_gl4es();
-
-void RTCWVR_ResyncClientYawWithGameYaw()
+int GetRequestedRefresh(void)
 {
-	//Allow several frames for the yaw to sync, first is this frame which is the old yaw
-	//second is the next frame which _should_ be the new yaw, but just in case it isn't
-	//we resync on the 3rd frame as well
-	resyncClientYawWithGameYaw = 2;
+	return TBXR_GetRefresh();
 }
 
-void RTCWVR_Init()
+void RTCWVR_ResyncClientYawWithGameYaw(void)
 {
-	//Initialise all our variables
-	playerYaw = 0.0f;
-	showingScreenLayer = qfalse;
-	remote_movementSideways = 0.0f;
-	remote_movementForward = 0.0f;
-	remote_movementUp = 0.0f;
-	positional_movementSideways = 0.0f;
-	positional_movementForward = 0.0f;
-	snapTurn = 0.0f;
-	ducked = DUCK_NOTDUCKED;
-	RTCWVR_ResyncClientYawWithGameYaw();
-
-	//init randomiser
-	srand(time(NULL));
-
-	//Create Cvars
-	vr_turn_mode = Cvar_Get( "vr_turn_mode", "0", CVAR_ARCHIVE); // 0 = snap, 1 = smooth
-	vr_turn_angle = Cvar_Get( "vr_turn_angle", "45", CVAR_ARCHIVE);
-	vr_reloadtimeoutms = Cvar_Get( "vr_reloadtimeoutms", "200", CVAR_ARCHIVE);
-	vr_positional_factor = Cvar_Get( "vr_positional_factor", "12", CVAR_ARCHIVE);
-    vr_walkdirection = Cvar_Get( "vr_walkdirection", "1", CVAR_ARCHIVE);
-	vr_movement_multiplier = Cvar_Get( "vr_movement_multiplier", "0.7", CVAR_ARCHIVE);
-	vr_weapon_pitchadjust = Cvar_Get( "vr_weapon_pitchadjust", "-20.0", CVAR_ARCHIVE);
-	vr_lasersight = Cvar_Get( "vr_lasersight", "0", CVAR_ARCHIVE);
-	vr_teleport = Cvar_Get( "vr_teleport", "0", CVAR_ARCHIVE);
-	vr_virtual_stock = Cvar_Get( "vr_virtual_stock", "0", CVAR_ARCHIVE);
-	vr_comfort_vignette = Cvar_Get ("vr_comfort_vignette", "0.0", CVAR_ARCHIVE);
-	vr_gesture_triggered_use = Cvar_Get ("vr_gesture_triggered_use", "1", CVAR_ARCHIVE);
-	vr_use_gesture_boundary = Cvar_Get ("vr_use_gesture_boundary", "0.35", CVAR_ARCHIVE);
-	vr_draw_hud = Cvar_Get ("vr_draw_hud", "1", CVAR_ARCHIVE);
-	vr_irl_crouch_enabled = Cvar_Get ("vr_irl_crouch_enabled", "0", CVAR_ARCHIVE);
-	vr_irl_crouch_to_stand_ratio = Cvar_Get ("vr_irl_crouch_to_stand_ratio", "0.65", CVAR_ARCHIVE);
-	vr_haptic_intensity = Cvar_Get ("vr_haptic_intensity", "1.0", CVAR_ARCHIVE);
-	vr_menu_item_touched = Cvar_Get ("vr_menu_item_touched", "0", CVAR_TEMP);
-	vr_refresh = Cvar_Get ("vr_refresh", "72", CVAR_ARCHIVE);
-	vr_spread_reduce = Cvar_Get ("vr_spread_reduce", "0.55", CVAR_ARCHIVE);
-
-    //Defaults
-	vr_control_scheme = Cvar_Get( "vr_control_scheme", "0", CVAR_ARCHIVE);
-	vr_switch_sticks = Cvar_Get( "vr_switch_sticks", "0", CVAR_ARCHIVE);
-
-	vr_cinematic_stereo = Cvar_Get( "vr_cinematic_stereo", "0", CVAR_ARCHIVE); // Default to 2D
-	vr_screen_dist = Cvar_Get( "vr_screen_dist", "4.4", CVAR_ARCHIVE);
-
-    //Set up vr client info
-	vr.backpackitemactive = 0;
-	vr.visible_hud = qtrue;
-	vr.weapon_recoil = 0.0f;
-
-	//Clear teleport stuff
-	vr.teleportexecute = qfalse;
-	vr.teleportseek = qfalse;
-	vr.teleportenabled = qfalse;
-	vr.teleportready = qfalse;
-
-	vr.menu_right_handed = vr_control_scheme->integer == 0;
+	resyncClientYawWithGameYaw = 1;
 }
 
-
-static ovrAppThread * gAppThread = NULL;
-static ovrApp gAppState;
-static ovrJava java;
-static qboolean destroyed = qfalse;
-
-void RTCWVR_prepareEyeBuffer(int eye )
+void RTCWVR_GetMove(float *forward, float *side, float *pos_forward, float *pos_side, float *up,
+					float *yaw, float *pitch, float *roll)
 {
-	ovrRenderer *renderer = RTCWVR_useScreenLayer() ? &gAppState.Scene.CylinderRenderer : &gAppState.Renderer;
-
-	ovrFramebuffer *frameBuffer = &(renderer->FrameBuffer[eye]);
-	ovrFramebuffer_SetCurrent(frameBuffer);
-
-	GL(glEnable(GL_SCISSOR_TEST));
-	GL(glDepthMask(GL_TRUE));
-	GL(glEnable(GL_DEPTH_TEST));
-	GL(glDepthFunc(GL_LEQUAL));
-
-	//Weusing the size of the render target
-	GL(glViewport(0, 0, frameBuffer->Width, frameBuffer->Height));
-	GL(glScissor(0, 0, frameBuffer->Width, frameBuffer->Height));
-
-	GL(glClearColor(0.0f, 0.0f, 0.0f, 1.0f));
-	GL(glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT));
-	GL(glDisable(GL_SCISSOR_TEST));
-}
-
-void RTCWVR_finishEyeBuffer(int eye )
-{
-	ovrRenderer *renderer = RTCWVR_useScreenLayer() ? &gAppState.Scene.CylinderRenderer : &gAppState.Renderer;
-
-	ovrFramebuffer *frameBuffer = &(renderer->FrameBuffer[eye]);
-
-	//Clear edge to prevent smearing
-	ovrFramebuffer_ClearEdgeTexels(frameBuffer);
-	ovrFramebuffer_Resolve(frameBuffer);
-	ovrFramebuffer_Advance(frameBuffer);
-
-	ovrFramebuffer_SetNone();
-}
-
-qboolean RTCWVR_processMessageQueue() {
-	for ( ; ; )
-	{
-		ovrMessage message;
-		const bool waitForMessages = ( gAppState.Ovr == NULL && destroyed == false );
-		if ( !ovrMessageQueue_GetNextMessage( &gAppThread->MessageQueue, &message, waitForMessages ) )
-		{
-			break;
-		}
-
-		switch ( message.Id )
-		{
-			case MESSAGE_ON_CREATE:
-			{
-				break;
-			}
-			case MESSAGE_ON_START:
-			{
-				if (!rtcw_initialised)
-				{
-					ALOGV( "    Initialising rtcw Engine" );
-
-					//Set command line arguments here
-					if (argc != 0)
-					{
-						//TODO
-					}
-					else
-					{
-						int argc = 1; char *argv[] = { "rtcw" };
-
-					}
-
-					rtcw_initialised = qtrue;
-				}
-				break;
-			}
-			case MESSAGE_ON_RESUME:
-			{
-				//If we get here, then user has opted not to quit
-				gAppState.Resumed = true;
-				break;
-			}
-			case MESSAGE_ON_PAUSE:
-			{
-				gAppState.Resumed = false;
-				break;
-			}
-			case MESSAGE_ON_STOP:
-			{
-				break;
-			}
-			case MESSAGE_ON_DESTROY:
-			{
-				gAppState.NativeWindow = NULL;
-				destroyed = true;
-				//shutdown = true;
-				break;
-			}
-			case MESSAGE_ON_SURFACE_CREATED:	{ gAppState.NativeWindow = (ANativeWindow *)ovrMessage_GetPointerParm( &message, 0 ); break; }
-			case MESSAGE_ON_SURFACE_DESTROYED:	{ gAppState.NativeWindow = NULL; break; }
-		}
-
-		ovrApp_HandleVrModeChanges( &gAppState );
+	if (forward) {
+		*forward = remote_movementForward;
+	}
+	if (side) {
+		*side = remote_movementSideways;
+	}
+	if (pos_forward) {
+		*pos_forward = positional_movementForward;
+	}
+	if (pos_side) {
+		*pos_side = positional_movementSideways;
+	}
+	if (up) {
+		*up = remote_movementUp;
+	}
+	if (yaw) {
+		*yaw = snapTurn;
+	}
+	if (pitch) {
+		*pitch = 0.0f;
+	}
+	if (roll) {
+		*roll = 0.0f;
 	}
 }
 
-void showLoadingIcon();
-void jni_shutdown();
-void RTCWVR_incrementFrameIndex();
-void shutdownVR();
-int VR_main( int argc, char* argv[] );
-
-int GetRefresh()
+void RTCWVR_Vibrate(int duration, int channel, float intensity)
 {
-    return vrapi_GetSystemPropertyInt(&java, VRAPI_SYS_PROP_DISPLAY_REFRESH_RATE);
+	TBXR_Vibrate(duration, channel, intensity);
 }
 
-int GetRequestedRefresh() {
-	float refresh = Cvar_VariableValue("vr_refresh");
-	if (!refresh) {
-		refresh = REFRESH;
-	}
-	return refresh;
-}
-
-void * AppThreadFunction(void * parm ) {
-	gAppThread = (ovrAppThread *) parm;
-
-	java.Vm = gAppThread->JavaVm;
-	(*java.Vm)->AttachCurrentThread(java.Vm, &java.Env, NULL);
-	java.ActivityObject = gAppThread->ActivityObject;
-
-	jclass cls = (*java.Env)->GetObjectClass(java.Env, java.ActivityObject);
-
-	// Note that AttachCurrentThread will reset the thread name.
-	prctl(PR_SET_NAME, (long) "OVR::Main", 0, 0, 0);
-
-	rtcw_initialised = false;
-	vr_screen_dist = NULL;
-
-	const ovrInitParms initParms = vrapi_DefaultInitParms(&java);
-	int32_t initResult = vrapi_Initialize(&initParms);
-	if (initResult != VRAPI_INITIALIZE_SUCCESS) {
-		// If intialization failed, vrapi_* function calls will not be available.
-		exit(0);
-	}
-
-	ovrApp_Clear(&gAppState);
-	gAppState.Java = java;
-
-	// This app will handle android gamepad events itself.
-	vrapi_SetPropertyInt(&gAppState.Java, VRAPI_EAT_NATIVE_GAMEPAD_EVENTS, 0);
-
-	//Set device defaults
-    if (vrapi_GetSystemPropertyInt(&java, VRAPI_SYS_PROP_DEVICE_TYPE) == VRAPI_DEVICE_TYPE_OCULUSQUEST)
-    {
-        if (SS_MULTIPLIER == 0.0f)
-        {
-            SS_MULTIPLIER = 1.2f;
-        }
-    }
-    else if (vrapi_GetSystemPropertyInt(&java, VRAPI_SYS_PROP_DEVICE_TYPE) == VRAPI_DEVICE_TYPE_OCULUSQUEST2)
-    {
-        if (SS_MULTIPLIER == 0.0f)
-        {
-            //GB Override as refresh is now 72 by default as we decided a higher res is better as 90hz has stutters
-            SS_MULTIPLIER = 1.35f;
-        }
-        else if (SS_MULTIPLIER > 1.5f)
-		{
-			SS_MULTIPLIER = 1.5f;
-		}
-    } else {
-        //Don't know what headset this is!? abort
-        return NULL;
-    }
-
-	//Using a symmetrical render target
-	m_height = m_width = (int)(vrapi_GetSystemPropertyInt(&java, VRAPI_SYS_PROP_SUGGESTED_EYE_TEXTURE_WIDTH) *  SS_MULTIPLIER);
-
-	gAppState.CpuLevel = CPU_LEVEL;
-	gAppState.GpuLevel = GPU_LEVEL;
-	gAppState.MainThreadTid = gettid();
-
-	ovrEgl_CreateContext(&gAppState.Egl, NULL);
-
-	EglInitExtensions();
-
-	//First handle any messages in the queue
-	while ( gAppState.Ovr == NULL ) {
-		RTCWVR_processMessageQueue();
-	}
-
-	ovrRenderer_Create(m_width, m_height, &gAppState.Renderer, &java);
-
-	if ( gAppState.Ovr == NULL )
-	{
-		return NULL;
-	}
-
-	// Create the scene if not yet created.
-	ovrScene_Create( m_width, m_height, &gAppState.Scene, &java );
-
-	chdir("/sdcard/RTCWQuest");
-
-	//Run loading loop until we are ready to start RTCWVR
-	while (!destroyed && !rtcw_initialised) {
-		RTCWVR_processMessageQueue();
-		RTCWVR_incrementFrameIndex();
-		showLoadingIcon();
-	}
-
-    int maximumSupportRefresh = 0;
-    //AmmarkoV : Query Refresh rates and select maximum..!
-    //-----------------------------------------------------------------------------------------------------------
-    int numberOfRefreshRates = vrapi_GetSystemPropertyInt(&java,
-                                                          VRAPI_SYS_PROP_NUM_SUPPORTED_DISPLAY_REFRESH_RATES);
-    float refreshRatesArray[16]; //Refresh rates are currently (12/2020) the following 4 : 60.0 / 72.0 / 80.0 / 90.0
-    if (numberOfRefreshRates > 16) { numberOfRefreshRates = 16; }
-    vrapi_GetSystemPropertyFloatArray(&java, VRAPI_SYS_PROP_SUPPORTED_DISPLAY_REFRESH_RATES,
-                                      &refreshRatesArray[0], numberOfRefreshRates);
-    for (int i = 0; i < numberOfRefreshRates; i++) {
-        ALOGV("Supported refresh rate : %d Hz", refreshRatesArray[i]);
-        if (maximumSupportRefresh < refreshRatesArray[i]) {
-            maximumSupportRefresh = refreshRatesArray[i];
-        }
-    }
-
-    if (maximumSupportRefresh > 90.0) {
-        ALOGV("Soft limiting to 90.0 Hz as per John carmack's request ( https://www.onlinepeeps.org/oculus-quest-2-according-to-carmack-in-the-future-also-at-120-hz/ );P");
-        maximumSupportRefresh = 90.0;
-    }
-
-    if (REFRESH == 0 || REFRESH > maximumSupportRefresh)
-    {
-        REFRESH = 72.0;
-    }
-    //-----------------------------------------------------------------------------------------------------------
-
-
-    //start
-	VR_main(argc, argv);
-
-	//We are done, shutdown cleanly
-	shutdownVR();
-
-	//Ask Java to shut down
-	jni_shutdown();
-
-	return NULL;
-}
-
-//All the stuff we want to do each frame
-void RTCWVR_FrameSetup()
+void RTCWVR_Haptic(int duration, int channel, float intensity, char *description, float yaw, float height)
 {
-	//Use floor based tracking space
-	vrapi_SetTrackingSpace(gAppState.Ovr, VRAPI_TRACKING_SPACE_LOCAL_FLOOR);
-
-	//Set framerate so VrApi doesn't change it on us..
-	vrapi_SetDisplayRefreshRate(gAppState.Ovr, GetRequestedRefresh());
-
-	vrapi_SetExtraLatencyMode(gAppState.Ovr, VRAPI_EXTRA_LATENCY_MODE_ON);
+	RTCWVR_HapticEvent(description, channel, 0, (int)(intensity * 100.0f), yaw, height);
+	RTCWVR_Vibrate(duration, channel, intensity);
 }
 
-void RTCWVR_processHaptics() {
-	static float lastFrameTime = 0.0f;
-	float timestamp = (float)(GetTimeInMilliSeconds());
-	float frametime = timestamp - lastFrameTime;
-	lastFrameTime = timestamp;
+void RTCWVR_HapticEvent(const char *event, int position, int flags, int intensity, float angle, float yHeight)
+{
+	JNIEnv *env = GetJniEnv();
+	if (!env || !jniCallbackObj || !android_haptic_event) {
+		return;
+	}
+	jstring eventString = (*env)->NewStringUTF(env, event ? event : "");
+	(*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_event, eventString, position, flags, intensity, angle, yHeight);
+	(*env)->DeleteLocalRef(env, eventString);
+}
 
-	for (int i = 0; i < 2; ++i) {
-		if (vibration_channel_duration[i] > 0.0f ||
-			vibration_channel_duration[i] == -1.0f) {
-			vrapi_SetHapticVibrationSimple(gAppState.Ovr, controllerIDs[i],
-										   vibration_channel_intensity[i]);
+void RTCWVR_HapticUpdateEvent(const char *event, int intensity, float angle)
+{
+	JNIEnv *env = GetJniEnv();
+	if (!env || !jniCallbackObj || !android_haptic_updateevent) {
+		return;
+	}
+	jstring eventString = (*env)->NewStringUTF(env, event ? event : "");
+	(*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_updateevent, eventString, intensity, angle);
+	(*env)->DeleteLocalRef(env, eventString);
+}
 
-			if (vibration_channel_duration[i] != -1.0f) {
-				vibration_channel_duration[i] -= frametime;
-
-				if (vibration_channel_duration[i] < 0.0f) {
-					vibration_channel_duration[i] = 0.0f;
-					vibration_channel_intensity[i] = 0.0f;
-				}
-			}
-		} else {
-			vrapi_SetHapticVibrationSimple(gAppState.Ovr, controllerIDs[i], 0.0f);
-		}
+void RTCWVR_HapticEndFrame(void)
+{
+	JNIEnv *env = GetJniEnv();
+	if (env && jniCallbackObj && android_haptic_endframe) {
+		(*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_endframe);
 	}
 }
 
-void showLoadingIcon()
+void RTCWVR_HapticStopEvent(const char *event)
 {
-	int frameFlags = 0;
-	frameFlags |= VRAPI_FRAME_FLAG_FLUSH;
-
-	ovrLayerProjection2 blackLayer = vrapi_DefaultLayerBlackProjection2();
-	blackLayer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_INHIBIT_SRGB_FRAMEBUFFER;
-
-	ovrLayerLoadingIcon2 iconLayer = vrapi_DefaultLayerLoadingIcon2();
-	iconLayer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_INHIBIT_SRGB_FRAMEBUFFER;
-
-	const ovrLayerHeader2 * layers[] =
-			{
-					&blackLayer.Header,
-					&iconLayer.Header,
-			};
-
-	ovrSubmitFrameDescription2 frameDesc = {};
-	frameDesc.Flags = frameFlags;
-	frameDesc.SwapInterval = 1;
-	frameDesc.FrameIndex = gAppState.FrameIndex;
-	frameDesc.DisplayTime = gAppState.DisplayTime;
-	frameDesc.LayerCount = 2;
-	frameDesc.Layers = layers;
-
-	vrapi_SubmitFrame2( gAppState.Ovr, &frameDesc );
-}
-
-void RTCWVR_getHMDOrientation() {//Get orientation
-
-	// Get the HMD pose, predicted for the middle of the time period during which
-	// the new eye images will be displayed. The number of frames predicted ahead
-	// depends on the pipeline depth of the engine and the synthesis rate.
-	// The better the prediction, the less black will be pulled in at the edges.
-	tracking = vrapi_GetPredictedTracking2(gAppState.Ovr, gAppState.DisplayTime);
-
-
-	// We extract Yaw, Pitch, Roll instead of directly using the orientation
-	// to allow "additional" yaw manipulation with mouse/controller.
-	const ovrQuatf quatHmd = tracking.HeadPose.Pose.Orientation;
-	const ovrVector3f positionHmd = tracking.HeadPose.Pose.Position;
-	vec3_t rotation = {0, 0, 0};
-	QuatToYawPitchRoll(quatHmd, rotation, vr.hmdorientation);
-	setHMDPosition(positionHmd.x, positionHmd.y, positionHmd.z);
-
-	updateHMDOrientation();
-
-	// Max-height is set only once on start, or after re-calibration
-	// (ignore too low value which is sometimes provided on start)
-	if (!vr.maxHeight || vr.maxHeight < 1.0) {
-		vr.maxHeight = positionHmd.y;
+	JNIEnv *env = GetJniEnv();
+	if (!env || !jniCallbackObj || !android_haptic_stopevent) {
+		return;
 	}
-	vr.curHeight = positionHmd.y;
-
-	ALOGV("        HMD-Position: %f, %f, %f", positionHmd.x, positionHmd.y, positionHmd.z);
+	jstring eventString = (*env)->NewStringUTF(env, event ? event : "");
+	(*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_stopevent, eventString);
+	(*env)->DeleteLocalRef(env, eventString);
 }
 
-void shutdownVR() {
-	ovrRenderer_Destroy( &gAppState.Renderer );
-	ovrEgl_DestroyContext( &gAppState.Egl );
-	(*java.Vm)->DetachCurrentThread( java.Vm );
-	vrapi_Shutdown();
-}
-
-long long RTCWVR_getFrameIndex()
+void RTCWVR_HapticEnable(void)
 {
-	return gAppState.FrameIndex;
-}
-
-void RTCWVR_incrementFrameIndex()
-{
-	// This is the only place the frame index is incremented, right before
-	// calling vrapi_GetPredictedDisplayTime().
-	gAppState.FrameIndex++;
-	gAppState.DisplayTime = vrapi_GetPredictedDisplayTime(gAppState.Ovr,
-														  gAppState.FrameIndex);
-}
-
-void RTCWVR_getTrackedRemotesOrientation() {//Get info for tracked remotes
-	acquireTrackedRemotesData(gAppState.Ovr, gAppState.DisplayTime);
-
-	//Call additional control schemes here
-	switch (vr_control_scheme->integer)
-	{
-		case RIGHT_HANDED_DEFAULT:
-			HandleInput_Default(&footTrackedRemoteState_new, &footTrackedRemoteState_old,
-			                    &rightTrackedRemoteState_new, &rightTrackedRemoteState_old, &rightRemoteTracking_new,
-								&leftTrackedRemoteState_new, &leftTrackedRemoteState_old, &leftRemoteTracking_new,
-								ovrButton_A, ovrButton_B, ovrButton_X, ovrButton_Y);
-			break;
-		case LEFT_HANDED_DEFAULT:
-			HandleInput_Default(&footTrackedRemoteState_new, &footTrackedRemoteState_old,
-			                    &leftTrackedRemoteState_new, &leftTrackedRemoteState_old, &leftRemoteTracking_new,
-								&rightTrackedRemoteState_new, &rightTrackedRemoteState_old, &rightRemoteTracking_new,
-								ovrButton_X, ovrButton_Y, ovrButton_A, ovrButton_B);
-			break;
-		case WEAPON_ALIGN:
-			HandleInput_WeaponAlign(&rightTrackedRemoteState_new, &rightTrackedRemoteState_old, &rightRemoteTracking_new,
-								&leftTrackedRemoteState_new, &leftTrackedRemoteState_old, &leftRemoteTracking_new,
-								ovrButton_A, ovrButton_B, ovrButton_X, ovrButton_Y);
-			break;
+	JNIEnv *env = GetJniEnv();
+	if (env && jniCallbackObj && android_haptic_enable) {
+		(*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_enable);
 	}
 }
 
-void RTCWVR_submitFrame()
+void RTCWVR_HapticDisable(void)
 {
-	ovrSubmitFrameDescription2 frameDesc = {0};
-
-	if (!RTCWVR_useScreenLayer()) {
-
-		ovrLayerProjection2 layer = vrapi_DefaultLayerProjection2();
-		layer.HeadPose = tracking.HeadPose;
-		for ( int eye = 0; eye < VRAPI_FRAME_LAYER_EYE_MAX; eye++ )
-		{
-			ovrFramebuffer * frameBuffer = &gAppState.Renderer.FrameBuffer[gAppState.Renderer.NumBuffers == 1 ? 0 : eye];
-			layer.Textures[eye].ColorSwapChain = frameBuffer->ColorTextureSwapChain;
-			layer.Textures[eye].SwapChainIndex = frameBuffer->ReadyTextureSwapChainIndex;
-
-			ovrMatrix4f projectionMatrix;
-			projectionMatrix = ovrMatrix4f_CreateProjectionFov(vr.fov, vr.fov,
-															   0.0f, 0.0f, 0.1f, 0.0f);
-
-			layer.Textures[eye].TexCoordsFromTanAngles = ovrMatrix4f_TanAngleMatrixFromProjection(&projectionMatrix);
-
-			layer.Textures[eye].TextureRect.x = 0;
-			layer.Textures[eye].TextureRect.y = 0;
-			layer.Textures[eye].TextureRect.width = 1.0f;
-			layer.Textures[eye].TextureRect.height = 1.0f;
-		}
-		layer.Header.Flags |= VRAPI_FRAME_LAYER_FLAG_CHROMATIC_ABERRATION_CORRECTION;
-
-		// Set up the description for this frame.
-		const ovrLayerHeader2 *layers[] =
-				{
-						&layer.Header
-				};
-
-		frameDesc.Flags = 0;
-		frameDesc.SwapInterval = gAppState.SwapInterval;
-		frameDesc.FrameIndex = gAppState.FrameIndex;
-		frameDesc.DisplayTime = gAppState.DisplayTime;
-		frameDesc.LayerCount = 1;
-		frameDesc.Layers = layers;
-
-		// Hand over the eye images to the time warp.
-		vrapi_SubmitFrame2(gAppState.Ovr, &frameDesc);
-
-	} else {
-		// Set-up the compositor layers for this frame.
-		// NOTE: Multiple independent layers are allowed, but they need to be added
-		// in a depth consistent order.
-		memset( gAppState.Layers, 0, sizeof( ovrLayer_Union2 ) * ovrMaxLayerCount );
-		gAppState.LayerCount = 0;
-
-		// Add a simple cylindrical layer
-		gAppState.Layers[gAppState.LayerCount++].Cylinder =
-				BuildCylinderLayer(&gAppState.Scene.CylinderRenderer,
-								   gAppState.Scene.CylinderWidth, gAppState.Scene.CylinderHeight, &tracking, radians(playerYaw) );
-
-		// Compose the layers for this frame.
-		const ovrLayerHeader2 * layerHeaders[ovrMaxLayerCount] = { 0 };
-		for ( int i = 0; i < gAppState.LayerCount; i++ )
-		{
-			layerHeaders[i] = &gAppState.Layers[i].Header;
-		}
-
-		// Set up the description for this frame.
-		frameDesc.Flags = 0;
-		frameDesc.SwapInterval = gAppState.SwapInterval;
-		frameDesc.FrameIndex = gAppState.FrameIndex;
-		frameDesc.DisplayTime = gAppState.DisplayTime;
-		frameDesc.LayerCount = gAppState.LayerCount;
-		frameDesc.Layers = layerHeaders;
-
-		// Hand over the eye images to the time warp.
-		vrapi_SubmitFrame2(gAppState.Ovr, &frameDesc);
-	}
-
-
-	RTCWVR_incrementFrameIndex();
-	RTCWVR_HapticEndFrame();
-}
-
-static void ovrAppThread_Create( ovrAppThread * appThread, JNIEnv * env, jobject activityObject, jclass activityClass )
-{
-	(*env)->GetJavaVM( env, &appThread->JavaVm );
-	appThread->ActivityObject = (*env)->NewGlobalRef( env, activityObject );
-	appThread->ActivityClass = (*env)->NewGlobalRef( env, activityClass );
-	appThread->Thread = 0;
-	appThread->NativeWindow = NULL;
-	ovrMessageQueue_Create( &appThread->MessageQueue );
-
-	const int createErr = pthread_create( &appThread->Thread, NULL, AppThreadFunction, appThread );
-	if ( createErr != 0 )
-	{
-		ALOGE( "pthread_create returned %i", createErr );
+	JNIEnv *env = GetJniEnv();
+	if (env && jniCallbackObj && android_haptic_disable) {
+		(*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_disable);
 	}
 }
 
-static void ovrAppThread_Destroy( ovrAppThread * appThread, JNIEnv * env )
+float radians(float deg)
 {
-	pthread_join( appThread->Thread, NULL );
-	(*env)->DeleteGlobalRef( env, appThread->ActivityObject );
-	(*env)->DeleteGlobalRef( env, appThread->ActivityClass );
-	ovrMessageQueue_Destroy( &appThread->MessageQueue );
+	return DEG2RAD(deg);
 }
 
-/*
-================================================================================
-
-Activity lifecycle
-
-================================================================================
-*/
-
-
-jmethodID android_shutdown;
-jmethodID android_haptic_event;
-jmethodID android_haptic_updateevent;
-jmethodID android_haptic_stopevent;
-jmethodID android_haptic_endframe;
-jmethodID android_haptic_enable;
-jmethodID android_haptic_disable;
-static JavaVM *jVM;
-static jobject jniCallbackObj=0;
-
-void jni_shutdown()
+float degrees(float rad)
 {
-	ALOGV("Calling: jni_shutdown");
-	JNIEnv *env;
-	jobject tmp;
-	if (((*jVM)->GetEnv(jVM, (void**) &env, JNI_VERSION_1_4))<0)
-	{
-		(*jVM)->AttachCurrentThread(jVM,&env, NULL);
-	}
-	return (*env)->CallVoidMethod(env, jniCallbackObj, android_shutdown);
+	return RAD2DEG(rad);
 }
 
-void jni_haptic_event(const char* event, int position, int flags, int intensity, float angle, float yHeight)
+void EFXR_SwapWindow(void)
 {
-    JNIEnv *env;
-    jobject tmp;
-    if (((*jVM)->GetEnv(jVM, (void**) &env, JNI_VERSION_1_4))<0)
-    {
-        (*jVM)->AttachCurrentThread(jVM,&env, NULL);
-    }
-
-    jstring StringArg1 = (*env)->NewStringUTF(env, event);
-
-    return (*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_event, StringArg1, position, flags, intensity, angle, yHeight);
+	glFlush();
 }
 
-void jni_haptic_updateevent(const char* event, int intensity, float angle)
+double GetTimeInMilliSeconds(void)
 {
-    JNIEnv *env;
-    jobject tmp;
-    if (((*jVM)->GetEnv(jVM, (void**) &env, JNI_VERSION_1_4))<0)
-    {
-        (*jVM)->AttachCurrentThread(jVM,&env, NULL);
-    }
-
-    jstring StringArg1 = (*env)->NewStringUTF(env, event);
-
-    return (*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_updateevent, StringArg1, intensity, angle);
+	return TBXR_GetTimeInMilliSeconds();
 }
 
-void jni_haptic_stopevent(const char* event)
+void GPUDropSync(void) {}
+void GPUWaitSync(void) {}
+
+int JNI_OnLoad(JavaVM *vm, void *reserved)
 {
-    ALOGV("Calling: jni_haptic_stopevent");
-    JNIEnv *env;
-    jobject tmp;
-    if (((*jVM)->GetEnv(jVM, (void**) &env, JNI_VERSION_1_4))<0)
-    {
-        (*jVM)->AttachCurrentThread(jVM,&env, NULL);
-    }
-
-    jstring StringArg1 = (*env)->NewStringUTF(env, event);
-
-    return (*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_stopevent, StringArg1);
-}
-
-void jni_haptic_endframe()
-{
-    JNIEnv *env;
-    jobject tmp;
-    if (((*jVM)->GetEnv(jVM, (void**) &env, JNI_VERSION_1_4))<0)
-    {
-        (*jVM)->AttachCurrentThread(jVM,&env, NULL);
-    }
-
-    return (*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_endframe);
-}
-
-void jni_haptic_enable()
-{
-    ALOGV("Calling: jni_haptic_enable");
-    JNIEnv *env;
-    jobject tmp;
-    if (((*jVM)->GetEnv(jVM, (void**) &env, JNI_VERSION_1_4))<0)
-    {
-        (*jVM)->AttachCurrentThread(jVM,&env, NULL);
-    }
-
-    return (*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_enable);
-}
-
-void jni_haptic_disable()
-{
-    ALOGV("Calling: jni_haptic_disable");
-    JNIEnv *env;
-    jobject tmp;
-    if (((*jVM)->GetEnv(jVM, (void**) &env, JNI_VERSION_1_4))<0)
-    {
-        (*jVM)->AttachCurrentThread(jVM,&env, NULL);
-    }
-
-    return (*env)->CallVoidMethod(env, jniCallbackObj, android_haptic_disable);
-}
-
-int JNI_OnLoad(JavaVM* vm, void* reserved)
-{
-	JNIEnv *env;
-    jVM = vm;
-	if((*vm)->GetEnv(vm, (void**) &env, JNI_VERSION_1_4) != JNI_OK)
-	{
-		ALOGE("Failed JNI_OnLoad");
-		return -1;
-	}
-
+	(void)reserved;
+	jVM = vm;
 	return JNI_VERSION_1_4;
 }
 
-JNIEXPORT jlong JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onCreate( JNIEnv * env, jclass activityClass, jobject activity,
+JNIEXPORT jlong JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onCreate(JNIEnv *env, jclass activityClass, jobject activity,
 																	   jstring commandLineParams)
 {
-	ALOGV( "    GLES3JNILib::onCreate()" );
-
-	/* the global arg_xxx structs are initialised within the argtable */
-	void *argtable[] = {
-			ss    = arg_dbl0("s", "supersampling", "<double>", "super sampling value (default: Q1: 1.2, Q2: 1.35)"),
-            cpu   = arg_int0("c", "cpu", "<int>", "CPU perf index 1-4 (default: 2)"),
-            gpu   = arg_int0("g", "gpu", "<int>", "GPU perf index 1-4 (default: 3)"),
-            msaa  = arg_int0("m", "msaa", "<int>", "MSAA (default: 1)"),
-            refresh  = arg_int0("r", "refresh", "<int>", "Refresh Rate (default: Q1: 72, Q2: 72)"),
-            end   = arg_end(20)
-	};
+	(*env)->GetJavaVM(env, &gAppThread.JavaVm);
+	gAppThread.ActivityObject = (*env)->NewGlobalRef(env, activity);
+	gAppThread.ActivityClass = (*env)->NewGlobalRef(env, activityClass);
 
 	jboolean iscopy;
 	const char *arg = (*env)->GetStringUTFChars(env, commandLineParams, &iscopy);
-
-	char *cmdLine = NULL;
-	if (arg && strlen(arg))
-	{
-		cmdLine = strdup(arg);
-	}
-
+	char *cmdLine = strdup(arg && *arg ? arg : "rtcw");
 	(*env)->ReleaseStringUTFChars(env, commandLineParams, arg);
 
-	ALOGV("Command line %s", cmdLine);
-	argv = malloc(sizeof(char*) * 255);
-	argc = ParseCommandLine(strdup(cmdLine), argv);
-
-	/* verify the argtable[] entries were allocated sucessfully */
-	if (arg_nullcheck(argtable) == 0) {
-		/* Parse the command line as defined by argtable[] */
-		arg_parse(argc, argv, argtable);
-
-        if (ss->count > 0 && ss->dval[0] > 0.0)
-        {
-            SS_MULTIPLIER = ss->dval[0];
-        }
-
-        if (cpu->count > 0 && cpu->ival[0] > 0 && cpu->ival[0] < 10)
-        {
-            CPU_LEVEL = cpu->ival[0];
-        }
-
-        if (gpu->count > 0 && gpu->ival[0] > 0 && gpu->ival[0] < 10)
-        {
-            GPU_LEVEL = gpu->ival[0];
-        }
-
-        if (msaa->count > 0 && msaa->ival[0] > 0 && msaa->ival[0] < 10)
-        {
-            NUM_MULTI_SAMPLES = msaa->ival[0];
-        }
-
-        if (refresh->count > 0 && refresh->ival[0] > 0 && refresh->ival[0] <= 120)
-        {
-            REFRESH = refresh->ival[0];
-        }
+	argv = calloc(255, sizeof(char *));
+	argc = ParseCommandLine(cmdLine, argv);
+	if (argc == 0) {
+		argc = 1;
+		argv[0] = "rtcw";
 	}
 
 	initialize_gl4es();
-
-	ovrAppThread * appThread = (ovrAppThread *) malloc( sizeof( ovrAppThread ) );
-	ovrAppThread_Create( appThread, env, activity, activityClass );
-
-	ovrMessageQueue_Enable( &appThread->MessageQueue, true );
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_CREATE, MQ_WAIT_PROCESSED );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
-
-	return (jlong)((size_t)appThread);
+	pthread_create(&gAppThread.Thread, NULL, RTCWVR_AppThread, NULL);
+	return (jlong)(size_t)&gAppThread;
 }
 
-
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onStart( JNIEnv * env, jobject obj, jlong handle, jobject obj1)
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onStart(JNIEnv *env, jobject obj, jlong handle, jobject activity)
 {
-	ALOGV( "    GLES3JNILib::onStart()" );
-
-
-    jniCallbackObj = (jobject)(*env)->NewGlobalRef(env, obj1);
+	(void)handle;
+	jniCallbackObj = (*env)->NewGlobalRef(env, activity);
 	jclass callbackClass = (*env)->GetObjectClass(env, jniCallbackObj);
-
-	android_shutdown = (*env)->GetMethodID(env,callbackClass,"shutdown","()V");
+	android_shutdown = (*env)->GetMethodID(env, callbackClass, "shutdown", "()V");
 	android_haptic_event = (*env)->GetMethodID(env, callbackClass, "haptic_event", "(Ljava/lang/String;IIIFF)V");
 	android_haptic_updateevent = (*env)->GetMethodID(env, callbackClass, "haptic_updateevent", "(Ljava/lang/String;IF)V");
 	android_haptic_stopevent = (*env)->GetMethodID(env, callbackClass, "haptic_stopevent", "(Ljava/lang/String;)V");
 	android_haptic_endframe = (*env)->GetMethodID(env, callbackClass, "haptic_endframe", "()V");
 	android_haptic_enable = (*env)->GetMethodID(env, callbackClass, "haptic_enable", "()V");
 	android_haptic_disable = (*env)->GetMethodID(env, callbackClass, "haptic_disable", "()V");
-
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_START, MQ_WAIT_PROCESSED );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
 }
 
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onResume( JNIEnv * env, jobject obj, jlong handle )
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onResume(JNIEnv *env, jobject obj, jlong handle)
 {
-	ALOGV( "    GLES3JNILib::onResume()" );
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_RESUME, MQ_WAIT_PROCESSED );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
+	(void)env; (void)obj; (void)handle;
+	gAppThread.Resumed = true;
 }
 
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onPause( JNIEnv * env, jobject obj, jlong handle )
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onPause(JNIEnv *env, jobject obj, jlong handle)
 {
-	ALOGV( "    GLES3JNILib::onPause()" );
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_PAUSE, MQ_WAIT_PROCESSED );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
+	(void)env; (void)obj; (void)handle;
+	gAppThread.Resumed = false;
 }
 
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onStop( JNIEnv * env, jobject obj, jlong handle )
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onStop(JNIEnv *env, jobject obj, jlong handle)
 {
-	ALOGV( "    GLES3JNILib::onStop()" );
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_STOP, MQ_WAIT_PROCESSED );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
+	(void)env; (void)obj; (void)handle;
 }
 
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onDestroy( JNIEnv * env, jobject obj, jlong handle )
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onDestroy(JNIEnv *env, jobject obj, jlong handle)
 {
-	ALOGV( "    GLES3JNILib::onDestroy()" );
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_DESTROY, MQ_WAIT_PROCESSED );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
-	ovrMessageQueue_Enable( &appThread->MessageQueue, false );
-
-	ovrAppThread_Destroy( appThread, env );
-	free( appThread );
-}
-
-/*
-================================================================================
-
-Surface lifecycle
-
-================================================================================
-*/
-
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onSurfaceCreated( JNIEnv * env, jobject obj, jlong handle, jobject surface )
-{
-	ALOGV( "    GLES3JNILib::onSurfaceCreated()" );
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-
-	ANativeWindow * newNativeWindow = ANativeWindow_fromSurface( env, surface );
-	if ( ANativeWindow_getWidth( newNativeWindow ) < ANativeWindow_getHeight( newNativeWindow ) )
-	{
-		// An app that is relaunched after pressing the home button gets an initial surface with
-		// the wrong orientation even though android:screenOrientation="landscape" is set in the
-		// manifest. The choreographer callback will also never be called for this surface because
-		// the surface is immediately replaced with a new surface with the correct orientation.
-		ALOGE( "        Surface not in landscape mode!" );
+	(void)obj; (void)handle;
+	if (gAppThread.NativeWindow) {
+		ANativeWindow_release(gAppThread.NativeWindow);
+		gAppThread.NativeWindow = NULL;
 	}
-
-	ALOGV( "        NativeWindow = ANativeWindow_fromSurface( env, surface )" );
-	appThread->NativeWindow = newNativeWindow;
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_SURFACE_CREATED, MQ_WAIT_PROCESSED );
-	ovrMessage_SetPointerParm( &message, 0, appThread->NativeWindow );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
-}
-
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onSurfaceChanged( JNIEnv * env, jobject obj, jlong handle, jobject surface )
-{
-	ALOGV( "    GLES3JNILib::onSurfaceChanged()" );
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-
-	ANativeWindow * newNativeWindow = ANativeWindow_fromSurface( env, surface );
-	if ( ANativeWindow_getWidth( newNativeWindow ) < ANativeWindow_getHeight( newNativeWindow ) )
-	{
-		// An app that is relaunched after pressing the home button gets an initial surface with
-		// the wrong orientation even though android:screenOrientation="landscape" is set in the
-		// manifest. The choreographer callback will also never be called for this surface because
-		// the surface is immediately replaced with a new surface with the correct orientation.
-		ALOGE( "        Surface not in landscape mode!" );
-	}
-
-	if ( newNativeWindow != appThread->NativeWindow )
-	{
-		if ( appThread->NativeWindow != NULL )
-		{
-			ovrMessage message;
-			ovrMessage_Init( &message, MESSAGE_ON_SURFACE_DESTROYED, MQ_WAIT_PROCESSED );
-			ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
-			ALOGV( "        ANativeWindow_release( NativeWindow )" );
-			ANativeWindow_release( appThread->NativeWindow );
-			appThread->NativeWindow = NULL;
-		}
-		if ( newNativeWindow != NULL )
-		{
-			ALOGV( "        NativeWindow = ANativeWindow_fromSurface( env, surface )" );
-			appThread->NativeWindow = newNativeWindow;
-			ovrMessage message;
-			ovrMessage_Init( &message, MESSAGE_ON_SURFACE_CREATED, MQ_WAIT_PROCESSED );
-			ovrMessage_SetPointerParm( &message, 0, appThread->NativeWindow );
-			ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
-		}
-	}
-	else if ( newNativeWindow != NULL )
-	{
-		ANativeWindow_release( newNativeWindow );
+	if (jniCallbackObj) {
+		(*env)->DeleteGlobalRef(env, jniCallbackObj);
+		jniCallbackObj = NULL;
 	}
 }
 
-JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onSurfaceDestroyed( JNIEnv * env, jobject obj, jlong handle )
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onSurfaceCreated(JNIEnv *env, jobject obj, jlong handle, jobject surface)
 {
-	ALOGV( "    GLES3JNILib::onSurfaceDestroyed()" );
-	ovrAppThread * appThread = (ovrAppThread *)((size_t)handle);
-	ovrMessage message;
-	ovrMessage_Init( &message, MESSAGE_ON_SURFACE_DESTROYED, MQ_WAIT_PROCESSED );
-	ovrMessageQueue_PostMessage( &appThread->MessageQueue, &message );
-	ALOGV( "        ANativeWindow_release( NativeWindow )" );
-	ANativeWindow_release( appThread->NativeWindow );
-	appThread->NativeWindow = NULL;
+	(void)obj; (void)handle;
+	if (gAppThread.NativeWindow) {
+		ANativeWindow_release(gAppThread.NativeWindow);
+		gAppThread.NativeWindow = NULL;
+	}
+	gAppThread.NativeWindow = ANativeWindow_fromSurface(env, surface);
+	gAppState.NativeWindow = gAppThread.NativeWindow;
+	gAppState.NativeWindowChanged = true;
+	__android_log_print(ANDROID_LOG_INFO, "RTCW", "Android VR: surface available %p", (void *)gAppThread.NativeWindow);
 }
 
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onSurfaceChanged(JNIEnv *env, jobject obj, jlong handle, jobject surface)
+{
+	Java_com_drbeef_rtcwquest_GLES3JNILib_onSurfaceCreated(env, obj, handle, surface);
+}
+
+JNIEXPORT void JNICALL Java_com_drbeef_rtcwquest_GLES3JNILib_onSurfaceDestroyed(JNIEnv *env, jobject obj, jlong handle)
+{
+	(void)env; (void)obj; (void)handle;
+	if (gAppThread.NativeWindow) {
+		ANativeWindow_release(gAppThread.NativeWindow);
+		gAppThread.NativeWindow = NULL;
+	}
+	gAppState.NativeWindow = NULL;
+	gAppState.NativeWindowChanged = true;
+}

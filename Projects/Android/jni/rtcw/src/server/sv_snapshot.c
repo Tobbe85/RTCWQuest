@@ -517,6 +517,80 @@ notVisible:
 	}
 }
 
+static void SV_VRLogSnapshotCastState( client_t *client, const snapshotEntityNumbers_t *entityNumbers, const clientSnapshot_t *frame ) {
+	static int lastLogTime;
+	int i;
+	int clientNum;
+	int linkedPlayers = 0;
+	int linkedCast = 0;
+	int linkedCastPlayers = 0;
+	int noClientCast = 0;
+	int selectedPlayers = 0;
+	int selectedCast = 0;
+	int selectedCastPlayers = 0;
+	int detailCount = 0;
+
+	if ( client != svs.clients ) {
+		return;
+	}
+	if ( svs.time < lastLogTime + 1000 ) {
+		return;
+	}
+	lastLogTime = svs.time;
+
+	clientNum = client - svs.clients;
+
+	for ( i = 0 ; i < sv.num_entities ; i++ ) {
+		sharedEntity_t *ent = SV_GentityNum( i );
+		if ( !ent->r.linked ) {
+			continue;
+		}
+		if ( ent->s.eType == ET_PLAYER ) {
+			linkedPlayers++;
+		}
+		if ( ent->r.svFlags & SVF_CASTAI ) {
+			linkedCast++;
+			if ( ent->r.svFlags & SVF_NOCLIENT ) {
+				noClientCast++;
+			}
+			if ( ent->s.eType == ET_PLAYER ) {
+				linkedCastPlayers++;
+			}
+		}
+	}
+
+	for ( i = 0 ; i < entityNumbers->numSnapshotEntities ; i++ ) {
+		sharedEntity_t *ent = SV_GentityNum( entityNumbers->snapshotEntities[i] );
+		if ( ent->s.eType == ET_PLAYER ) {
+			selectedPlayers++;
+		}
+		if ( ent->r.svFlags & SVF_CASTAI ) {
+			selectedCast++;
+			if ( ent->s.eType == ET_PLAYER ) {
+				selectedCastPlayers++;
+			}
+		}
+	}
+
+	Com_Printf( "VR snapshot cast probe: time=%d client=%d psClient=%d svEnts=%d selected=%d frameEnts=%d linkedPlayers=%d linkedCast=%d linkedCastPlayers=%d noClientCast=%d selectedPlayers=%d selectedCast=%d selectedCastPlayers=%d\n",
+				svs.time, clientNum, frame->ps.clientNum, sv.num_entities,
+				entityNumbers->numSnapshotEntities, frame->num_entities, linkedPlayers,
+				linkedCast, linkedCastPlayers, noClientCast, selectedPlayers,
+				selectedCast, selectedCastPlayers );
+
+	for ( i = 0 ; i < sv.num_entities && detailCount < 6 ; i++ ) {
+		sharedEntity_t *ent = SV_GentityNum( i );
+		if ( !( ent->r.svFlags & SVF_CASTAI ) ) {
+			continue;
+		}
+		detailCount++;
+		Com_Printf( "VR snapshot cast detail: ent=%d linked=%d eType=%d num=%d clientNum=%d svFlags=0x%x eFlags=0x%x contents=0x%x origin=%.1f %.1f %.1f\n",
+					i, ent->r.linked, ent->s.eType, ent->s.number, ent->s.clientNum,
+					ent->r.svFlags, ent->s.eFlags, ent->r.contents,
+					ent->s.origin[0], ent->s.origin[1], ent->s.origin[2] );
+	}
+}
+
 /*
 =============
 SV_BuildClientSnapshot
@@ -542,6 +616,7 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 	sharedEntity_t              *clent;
 	int clientNum;
 	playerState_t               *ps;
+	qboolean cameraSnapshot;
 
 	// bump the counter used to prevent double adding
 	sv.snapshotCounter++;
@@ -592,24 +667,50 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 
 	svEnt->snapshotCounter = sv.snapshotCounter;
 
-	// find the client's viewpoint
-	VectorCopy( ps->origin, org );
-	org[2] += ps->viewheight;
+	cameraSnapshot = qfalse;
+	if ( clent->s.eFlags & EF_VIEWING_CAMERA ) {
+		for ( i = 0 ; i < sv.num_entities ; i++ ) {
+			ent = SV_GentityNum( i );
+			if ( !( ent->r.svFlags & SVF_PORTAL ) || ( ent->r.svFlags & SVF_NOCLIENT ) ) {
+				continue;
+			}
+			if ( ent->s.origin2[0] || ent->s.origin2[1] || ent->s.origin2[2] ) {
+				VectorCopy( ent->s.origin2, org );
+				cameraSnapshot = qtrue;
+				break;
+			}
+		}
+	}
+
+	if ( !cameraSnapshot ) {
+		// find the client's viewpoint
+		VectorCopy( ps->origin, org );
+		org[2] += ps->viewheight;
 
 //----(SA)	added for 'lean'
-	// need to account for lean, so areaportal doors draw properly
-	if ( frame->ps.leanf != 0 ) {
-		vec3_t right, v3ViewAngles;
-		VectorCopy( ps->viewangles, v3ViewAngles );
-		v3ViewAngles[2] += frame->ps.leanf / 2.0f;
-		AngleVectors( v3ViewAngles, NULL, right, NULL );
-		VectorMA( org, frame->ps.leanf, right, org );
-	}
+		// need to account for lean, so areaportal doors draw properly
+		if ( frame->ps.leanf != 0 ) {
+			vec3_t right, v3ViewAngles;
+			VectorCopy( ps->viewangles, v3ViewAngles );
+			v3ViewAngles[2] += frame->ps.leanf / 2.0f;
+			AngleVectors( v3ViewAngles, NULL, right, NULL );
+			VectorMA( org, frame->ps.leanf, right, org );
+		}
 //----(SA)	end
+	}
+
+	if ( clent->s.eFlags & EF_VIEWING_CAMERA ) {
+		static int lastCameraSnapshotLogTime;
+		if ( svs.time >= lastCameraSnapshotLogTime + 1000 ) {
+			Com_Printf( "VR camera snapshot: direct=%d origin=%.1f %.1f %.1f selectedBefore=%d\n",
+						cameraSnapshot, org[0], org[1], org[2], entityNumbers.numSnapshotEntities );
+			lastCameraSnapshotLogTime = svs.time;
+		}
+	}
 
 	// add all the entities directly visible to the eye, which
 	// may include portal entities that merge other viewpoints
-	SV_AddEntitiesVisibleFromPoint( org, frame, &entityNumbers, qfalse, client->netchan.remoteAddress.type == NA_LOOPBACK );
+	SV_AddEntitiesVisibleFromPoint( org, frame, &entityNumbers, cameraSnapshot, client->netchan.remoteAddress.type == NA_LOOPBACK );
 //	SV_AddEntitiesVisibleFromPoint( org, frame, &entityNumbers, qfalse, oldframe, client->netchan.remoteAddress.type == NA_LOOPBACK );
 
 	// if there were portals visible, there may be out of order entities
@@ -639,6 +740,7 @@ static void SV_BuildClientSnapshot( client_t *client ) {
 		}
 		frame->num_entities++;
 	}
+	SV_VRLogSnapshotCastState( client, &entityNumbers, frame );
 }
 
 

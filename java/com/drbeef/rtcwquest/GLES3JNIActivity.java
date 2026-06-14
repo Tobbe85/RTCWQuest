@@ -22,9 +22,14 @@ import android.content.res.AssetManager;
 
 import android.media.AudioRecord;
 import android.media.AudioTrack;
+import android.net.Uri;
+import android.os.Build;
 import android.os.Bundle;
+import android.os.Environment;
 import android.os.IBinder;
+import android.os.PowerManager;
 import android.os.RemoteException;
+import android.provider.Settings;
 import android.util.Log;
 import android.view.SurfaceHolder;
 import android.view.SurfaceView;
@@ -42,6 +47,16 @@ import static android.system.Os.setenv;
 	// Load the gles3jni library right away to make sure JNI_OnLoad() gets called as the very first thing.
 	static
 	{
+		String manufacturer = Build.MANUFACTURER == null ? "" : Build.MANUFACTURER.toLowerCase();
+		String openXrHmd = manufacturer.contains("oculus") || manufacturer.contains("meta")
+				? "meta"
+				: manufacturer.contains("pico") ? "pico" : manufacturer;
+		try {
+			setenv("OPENXR_HMD", openXrHmd, true);
+			System.loadLibrary("openxr_loader");
+		} catch (Throwable t) {
+			Log.w("RTCWQuest", "Unable to pre-load OpenXR loader", t);
+		}
 		System.loadLibrary( "rtcw_client" );
 	}
 
@@ -53,12 +68,14 @@ import static android.system.Os.setenv;
 	private boolean permissionsGranted = false;
 	private static final int READ_EXTERNAL_STORAGE_PERMISSION_ID = 1;
 	private static final int WRITE_EXTERNAL_STORAGE_PERMISSION_ID = 2;
+	private static final int MANAGE_EXTERNAL_STORAGE_PERMISSION_ID = 3;
 
 	String commandLineParams;
 
 	private SurfaceView mView;
 	private SurfaceHolder mSurfaceHolder;
 	private long mNativeHandle;
+	private PowerManager.WakeLock mWakeLock;
 
 	// Main components
 	protected static GLES3JNIActivity mSingleton;
@@ -188,13 +205,15 @@ import static android.system.Os.setenv;
 	/** Initializes the Activity only if the permission has been granted. */
 	private void checkPermissionsAndInitialize() {
 		// Boilerplate for checking runtime permissions in Android.
-		if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
+				ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
 				!= PackageManager.PERMISSION_GRANTED){
 			ActivityCompat.requestPermissions(
 					GLES3JNIActivity.this,
 					new String[] {Manifest.permission.WRITE_EXTERNAL_STORAGE},
 					WRITE_EXTERNAL_STORAGE_PERMISSION_ID);
-		} else if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+		} else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
+				ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
 				!= PackageManager.PERMISSION_GRANTED){
 			ActivityCompat.requestPermissions(
 					GLES3JNIActivity.this,
@@ -230,7 +249,22 @@ import static android.system.Os.setenv;
 		checkPermissionsAndInitialize();
 	}
 
+	@Override
+	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+		super.onActivityResult(requestCode, resultCode, data);
+		if (requestCode == MANAGE_EXTERNAL_STORAGE_PERMISSION_ID) {
+			checkPermissionsAndInitialize();
+		}
+	}
+
 	public void create() {
+		if (mNativeHandle != 0) {
+			return;
+		}
+
+		getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+		acquireTestWakeLock();
+
 		//Make the directories
 		new File("/sdcard/RTCWQuest/Main").mkdirs();
 
@@ -307,6 +341,29 @@ import static android.system.Os.setenv;
 		externalHapticsServiceClient.bindService();
 
 		mNativeHandle = GLES3JNILib.onCreate( this, commandLineParams );
+		if (mSurfaceHolder != null && mSurfaceHolder.getSurface() != null && mSurfaceHolder.getSurface().isValid()) {
+			GLES3JNILib.onSurfaceCreated(mNativeHandle, mSurfaceHolder.getSurface());
+		}
+	}
+
+	private void acquireTestWakeLock() {
+		if (mWakeLock == null) {
+			PowerManager powerManager = (PowerManager)getSystemService(Context.POWER_SERVICE);
+			if (powerManager != null) {
+				mWakeLock = powerManager.newWakeLock(PowerManager.SCREEN_BRIGHT_WAKE_LOCK,
+						"RTCWQuest:OpenXRTestWakeLock");
+				mWakeLock.setReferenceCounted(false);
+			}
+		}
+		if (mWakeLock != null && !mWakeLock.isHeld()) {
+			mWakeLock.acquire();
+		}
+	}
+
+	private void releaseTestWakeLock() {
+		if (mWakeLock != null && mWakeLock.isHeld()) {
+			mWakeLock.release();
+		}
 	}
 
 	public void copy_asset(String path, String name, boolean force) {
@@ -366,6 +423,7 @@ import static android.system.Os.setenv;
 	{
 		Log.v( TAG, "GLES3JNIActivity::onResume()" );
 		super.onResume();
+		acquireTestWakeLock();
 
 		if ( mNativeHandle != 0 )
 		{
@@ -396,6 +454,7 @@ import static android.system.Os.setenv;
 	@Override protected void onDestroy()
 	{
 		Log.v( TAG, "GLES3JNIActivity::onDestroy()" );
+		releaseTestWakeLock();
 
 		if ( mSurfaceHolder != null )
 		{
@@ -418,20 +477,20 @@ import static android.system.Os.setenv;
 	@Override public void surfaceCreated( SurfaceHolder holder )
 	{
 		Log.v( TAG, "GLES3JNIActivity::surfaceCreated()" );
+		mSurfaceHolder = holder;
 		if ( mNativeHandle != 0 )
 		{
 			GLES3JNILib.onSurfaceCreated( mNativeHandle, holder.getSurface() );
-			mSurfaceHolder = holder;
 		}
 	}
 
 	@Override public void surfaceChanged( SurfaceHolder holder, int format, int width, int height )
 	{
 		Log.v( TAG, "GLES3JNIActivity::surfaceChanged()" );
+		mSurfaceHolder = holder;
 		if ( mNativeHandle != 0 )
 		{
 			GLES3JNILib.onSurfaceChanged( mNativeHandle, holder.getSurface() );
-			mSurfaceHolder = holder;
 		}
 	}
 	

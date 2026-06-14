@@ -114,6 +114,9 @@ If you have questions concerning this license or the applicable additional terms
 #define HUD_FLAGS_MG42_CROSSHAIR		4
 #define HUD_ZOOMED_CROSSHAIR			8
 
+#define CG_HUD_NORMAL	0
+#define CG_HUD_SCALED	1
+
 //=================================================
 
 // player entities need to track more information
@@ -1018,6 +1021,8 @@ typedef struct {
 	int crossHairStatus;
 	#endif
 
+	int drawingHUD;
+
 } cg_t;
 
 #define NUM_FUNNEL_SPRITES  21
@@ -1693,6 +1698,10 @@ extern vmCvar_t cg_drawCrosshair;
 extern vmCvar_t cg_drawCrosshairNames;
 extern vmCvar_t cg_drawCrosshairPickups;
 extern vmCvar_t cg_hudAlpha;
+extern vmCvar_t cg_hudScale;
+extern vmCvar_t cg_hudDepth;
+extern vmCvar_t cg_hudYOffset;
+extern float cg_vrHudYBias;
 extern vmCvar_t cg_useWeapsForZoom;
 extern vmCvar_t cg_weaponCycleDelay;            //----(SA)	added
 extern vmCvar_t cg_cycleAllWeaps;
@@ -1901,6 +1910,7 @@ void CG_ZoomOut_f( void );
 void CG_ZoomUp_f( void );
 
 void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demoPlayback );
+void CG_DrawSkyBoxPortal( void );
 
 void CG_Concussive( centity_t *cent );
 //

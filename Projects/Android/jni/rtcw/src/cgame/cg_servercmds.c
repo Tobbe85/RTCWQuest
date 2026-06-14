@@ -995,6 +995,25 @@ static void CG_ServerCommand( void ) {
 	}
 
 	if ( !strcmp( cmd, "rockandroll" ) ) {   // map loaded, game is ready to begin.
+#ifdef __ANDROID__
+		CG_Printf( "Android: bypassing pregame briefing\n" );
+		trap_Cvar_Set( "g_playerstart", "1" );
+		trap_Cvar_Set( "g_reloading", "0" );
+		trap_Cvar_Set( "cg_norender", "0" );
+		trap_Cvar_Set( "cl_paused", "0" );
+		trap_S_FadeAllSound( 1.0f, 1000 );
+		return;
+#else
+		if ( trap_Cvar_VariableIntegerValue( "vr_autoPlayerStart" ) ) {
+			CG_Printf( "Android: vr_autoPlayerStart bypassing pregame briefing\n" );
+			trap_Cvar_Set( "g_playerstart", "1" );
+			trap_Cvar_Set( "g_reloading", "0" );
+			trap_Cvar_Set( "cg_norender", "0" );
+			trap_Cvar_Set( "cl_paused", "0" );
+			trap_S_FadeAllSound( 1.0f, 1000 );
+			return;
+		}
+
 		CG_Fade( 0, 0, 0, 255, cg.time, 0 );      // go black
 		trap_UI_Popup( "pregame" );                // start pregame menu
 		trap_Cvar_Set( "cg_norender", "1" );    // don't render the world until the player clicks in and the 'playerstart' func has been called (g_main in G_UpdateCvars() ~ilne 949)
@@ -1002,6 +1021,7 @@ static void CG_ServerCommand( void ) {
 		trap_S_FadeAllSound( 1.0f, 1000 );    // fade sound up
 
 		return;
+#endif
 	}
 
 

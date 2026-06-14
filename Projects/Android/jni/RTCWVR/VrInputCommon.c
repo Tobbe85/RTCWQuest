@@ -7,12 +7,6 @@ Authors		:	Simon Brown
 
 *************************************************************************************/
 
-#include <VrApi.h>
-#include <VrApi_Helpers.h>
-#include <VrApi_SystemUtils.h>
-#include <VrApi_Input.h>
-#include <VrApi_Types.h>
-
 #include "VrInput.h"
 
 #include <src/qcommon/qcommon.h>
@@ -86,55 +80,9 @@ void sendButtonAction(const char* action, long buttonDown)
     Cbuf_AddText( command );
 }
 
-void acquireTrackedRemotesData(const ovrMobile *Ovr, double displayTime) {//The amount of yaw changed by controller
-    for ( int i = 0; ; i++ ) {
-        ovrInputCapabilityHeader cap;
-        ovrResult result = vrapi_EnumerateInputDevices(Ovr, i, &cap);
-        if (result < 0) {
-            break;
-        }
-
-        if (cap.Type == ovrControllerType_Gamepad) {
-
-            ovrInputGamepadCapabilities remoteCaps;
-            remoteCaps.Header = cap;
-            if (vrapi_GetInputDeviceCapabilities(Ovr, &remoteCaps.Header) >= 0) {
-                // remote is connected
-                ovrInputStateGamepad remoteState;
-                remoteState.Header.ControllerType = ovrControllerType_Gamepad;
-                if ( vrapi_GetCurrentInputState( Ovr, cap.DeviceID, &remoteState.Header ) >= 0 )
-                {
-                    // act on device state returned in remoteState
-                    footTrackedRemoteState_new = remoteState;
-                }
-            }
-        }
-        else if (cap.Type == ovrControllerType_TrackedRemote) {
-            ovrTracking remoteTracking;
-            ovrInputStateTrackedRemote trackedRemoteState;
-            trackedRemoteState.Header.ControllerType = ovrControllerType_TrackedRemote;
-            result = vrapi_GetCurrentInputState(Ovr, cap.DeviceID, &trackedRemoteState.Header);
-
-            if (result == ovrSuccess) {
-                ovrInputTrackedRemoteCapabilities remoteCapabilities;
-                remoteCapabilities.Header = cap;
-                result = vrapi_GetInputDeviceCapabilities(Ovr, &remoteCapabilities.Header);
-
-                result = vrapi_GetInputTrackingState(Ovr, cap.DeviceID, displayTime,
-                                                     &remoteTracking);
-
-                if (remoteCapabilities.ControllerCapabilities & ovrControllerCaps_RightHand) {
-                    rightTrackedRemoteState_new = trackedRemoteState;
-                    rightRemoteTracking_new = remoteTracking;
-                    controllerIDs[1] = cap.DeviceID;
-                } else{
-                    leftTrackedRemoteState_new = trackedRemoteState;
-                    leftRemoteTracking_new = remoteTracking;
-                    controllerIDs[0] = cap.DeviceID;
-                }
-            }
-        }
-    }
+void acquireTrackedRemotesData(double displayTime) {
+    (void)displayTime;
+    TBXR_UpdateControllers();
 }
 
 

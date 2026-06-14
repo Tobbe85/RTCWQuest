@@ -29,6 +29,9 @@ If you have questions concerning this license or the applicable additional terms
 // cl_scrn.c -- master for refresh, status bar, console, chat, notify, etc
 
 #include "client.h"
+#include "../../../RTCWVR/VrClientInfo.h"
+
+extern vr_client_info_t vr;
 
 qboolean scr_initialized;           // ready to draw
 
@@ -536,6 +539,7 @@ text to the screen.
 */
 
 void RTCWVR_FrameSetup();
+void RTCWVR_prepareEyeBuffer(int eye );
 void RTCWVR_finishEyeBuffer(int eye );
 qboolean RTCWVR_useScreenLayer();
 void RTCWVR_processHaptics();
@@ -544,8 +548,34 @@ qboolean RTCWVR_processMessageQueue();
 void RTCWVR_getTrackedRemotesOrientation();
 void GPUDropSync();
 
+static void SCR_DrawDirectStereoFrame( void ) {
+	RTCWVR_prepareEyeBuffer( 0 );
+	SCR_DrawScreenField( STEREO_LEFT );
+
+	if ( com_speeds->integer ) {
+		re.EndFrame( STEREO_LEFT, &time_frontend, &time_backend );
+	} else {
+		re.EndFrame( STEREO_LEFT, NULL, NULL );
+	}
+
+	RTCWVR_finishEyeBuffer( 0 );
+
+	RTCWVR_prepareEyeBuffer( 1 );
+	SCR_DrawScreenField( STEREO_RIGHT );
+
+	if ( com_speeds->integer ) {
+		re.EndFrame( STEREO_RIGHT, &time_frontend, &time_backend );
+	} else {
+		re.EndFrame( STEREO_RIGHT, NULL, NULL );
+	}
+
+	RTCWVR_finishEyeBuffer( 1 );
+}
+
 void SCR_UpdateScreen( void ) {
 	static int recursive;
+	static cvar_t *vr_stereoReplay;
+	static qboolean replayFailureLogged;
 
 	if ( !scr_initialized ) {
 		return;             // not initialized yet
@@ -566,32 +596,64 @@ void SCR_UpdateScreen( void ) {
 
 	RTCWVR_processHaptics();
 
-	//Draw twice for Quest
-	SCR_DrawScreenField( STEREO_LEFT );
+	if ( RTCWVR_useScreenLayer() ) {
+		RTCWVR_prepareEyeBuffer( 0 );
+		SCR_DrawScreenField( STEREO_CENTER );
 
-	//This won't perform the submit eye buffers
-	{
-		if (com_speeds->integer) {
-			re.EndFrame(STEREO_LEFT, &time_frontend, &time_backend);
+		if ( com_speeds->integer ) {
+			re.EndFrame( STEREO_CENTER, &time_frontend, &time_backend );
 		} else {
-			re.EndFrame(STEREO_LEFT, NULL, NULL);
+			re.EndFrame( STEREO_CENTER, NULL, NULL );
+		}
+
+		RTCWVR_finishEyeBuffer( 0 );
+	} else if ( !( vr_stereoReplay ? vr_stereoReplay->integer : ( vr_stereoReplay = Cvar_Get( "vr_stereoReplay", "0", CVAR_ARCHIVE ) )->integer ) ) {
+		SCR_DrawDirectStereoFrame();
+	} else {
+		int eye;
+		qboolean replayOk = qtrue;
+
+		if ( !re.VR_BeginStereoReplayCapture || !re.VR_ReplayStereoFrame ||
+			 !re.VR_BeginStereoReplayCapture() ) {
+			if ( !replayFailureLogged ) {
+				Com_Printf( "VR stereo replay unavailable; falling back to direct stereo.\n" );
+				replayFailureLogged = qtrue;
+			}
+			SCR_DrawDirectStereoFrame();
+			goto submitFrame;
+		}
+
+		vr.eye = 0;
+		vr.off_center_fov_x[0] = vr.off_center_fov_x[1] = 0.0f;
+		vr.off_center_fov_y[0] = vr.off_center_fov_y[1] = 0.0f;
+
+		SCR_DrawScreenField( STEREO_CENTER );
+
+		for ( eye = 0; eye < 2; eye++ ) {
+			RTCWVR_prepareEyeBuffer( eye );
+			if ( !re.VR_ReplayStereoFrame( eye == 0 ? STEREO_LEFT : STEREO_RIGHT, eye == 1 ) ) {
+				if ( re.VR_CancelStereoReplayCapture ) {
+					re.VR_CancelStereoReplayCapture();
+				}
+				RTCWVR_finishEyeBuffer( eye );
+				replayOk = qfalse;
+				if ( !replayFailureLogged ) {
+					Com_Printf( "VR stereo replay failed; falling back to direct stereo on subsequent frames.\n" );
+					replayFailureLogged = qtrue;
+				}
+				Cvar_Set( "vr_stereoReplay", "0" );
+				break;
+			}
+			RTCWVR_finishEyeBuffer( eye );
+		}
+
+		if ( !replayOk ) {
+			goto submitFrame;
 		}
 	}
 
-    RTCWVR_finishEyeBuffer(0);
-
-    SCR_DrawScreenField( STEREO_RIGHT );
-
-    //This will perform the submit eye buffers
-	if ( com_speeds->integer ) {
-		re.EndFrame( STEREO_RIGHT, &time_frontend, &time_backend );
-	} else {
-		re.EndFrame( STEREO_RIGHT, NULL, NULL );
-	}
-
-    RTCWVR_finishEyeBuffer(1);
-
 	//And we're done
+submitFrame:
 	re.SubmitStereoFrame();
 
 	recursive = 0;

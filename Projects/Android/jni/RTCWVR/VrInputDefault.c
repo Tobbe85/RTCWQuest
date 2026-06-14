@@ -7,11 +7,6 @@ Authors		:	Simon Brown
 
 *************************************************************************************/
 
-#include "../../../../../../VrApi/Include/VrApi.h"
-#include "../../../../../../VrApi/Include/VrApi_Helpers.h"
-#include "../../../../../../VrApi/Include/VrApi_SystemUtils.h"
-#include "../../../../../../VrApi/Include/VrApi_Input.h"
-#include "../../../../../../VrApi/Include/VrApi_Types.h"
 #include <android/keycodes.h>
 
 #include "VrInput.h"
@@ -33,7 +28,6 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
                           ovrInputStateTrackedRemote *pDominantTrackedRemoteNew, ovrInputStateTrackedRemote *pDominantTrackedRemoteOld, ovrTracking* pDominantTracking,
                           ovrInputStateTrackedRemote *pOffTrackedRemoteNew, ovrInputStateTrackedRemote *pOffTrackedRemoteOld, ovrTracking* pOffTracking,
                           int domButton1, int domButton2, int offButton1, int offButton2 )
-
 {
 	//Ensure handedness is set correctly
 	vr.right_handed = vr_control_scheme->value < 10 ||
@@ -94,8 +88,6 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
         secondaryButton2 = offButton2;
     }
 
-
-
     {
         //Set gun angles - We need to calculate all those we might need (including adjustments) for the client to then take its pick
         vec3_t rotation = {0};
@@ -109,8 +101,6 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
 
         VectorSubtract(vr.weaponangles_last, vr.weaponangles, vr.weaponangles_delta);
         VectorCopy(vr.weaponangles, vr.weaponangles_last);
-
-        ALOGV("        weaponangles_last: %f, %f, %f", vr.weaponangles_last[0], vr.weaponangles_last[1], vr.weaponangles_last[2]);
 
         //GB Also set offhand angles just in case we want to use those.
         vec3_t rotation_off = {0};
@@ -598,7 +588,7 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
             {
                 static qboolean zoomin = true;
                 if (pDominantTrackedRemoteNew->Buttons & ovrButton_Trigger) {
-                    sendButtonActionSimple(zoomin ? "weapnext" : "weapprev");
+                    sendButtonActionSimple(zoomin ? "zoomin" : "zoomout");
                 } else if (pDominantTrackedRemoteOld->Buttons & ovrButton_Trigger)
                 {
                     zoomin = !zoomin;
@@ -648,21 +638,20 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
                                  (pDominantTrackedRemoteNew->Buttons & ovrButton_Joystick) ? 1 : 0);
             }
 
-            //Apply a filter and quadratic scaler so small movements are easier to make
+            // Apply the same local stick movement model as the later OpenXR ports:
+            // controller input is forward/side in usercmd space, and the engine's
+            // current view yaw determines the world-space movement direction.
             float dist = length(pSecondaryJoystick->x, pSecondaryJoystick->y);
             float nlf = nonLinearFilter(dist);
-            float x = (nlf * pSecondaryJoystick->x) + pFootTrackingNew->LeftJoystick.x;
-            float y = (nlf * pSecondaryJoystick->y) - pFootTrackingNew->LeftJoystick.y;
+            float d = (dist > 1.0f) ? dist : 1.0f;
+            float x = (nlf * (pSecondaryJoystick->x / d)) + pFootTrackingNew->LeftJoystick.x;
+            float y = (nlf * (pSecondaryJoystick->y / d)) - pFootTrackingNew->LeftJoystick.y;
 
             vr.player_moving = (fabs(x) + fabs(y)) > 0.05f;
 
-            //Adjust to be off-hand controller oriented
-            vec2_t v;
-            rotateAboutOrigin(x, y, controllerYawHeading, v);
-
             //Move a lot slower if scope is engaged
-            remote_movementSideways = v[0] * (vr.scopeengaged ? 0.3f : 1.0f) * vr_movement_multiplier->value;
-            remote_movementForward = v[1] * (vr.scopeengaged ? 0.3f : 1.0f) * vr_movement_multiplier->value;
+            remote_movementSideways = x * (vr.scopeengaged ? 0.3f : 1.0f) * vr_movement_multiplier->value;
+            remote_movementForward = y * (vr.scopeengaged ? 0.3f : 1.0f) * vr_movement_multiplier->value;
             ALOGV("        remote_movementSideways: %f, remote_movementForward: %f",
                   remote_movementSideways,
                   remote_movementForward);

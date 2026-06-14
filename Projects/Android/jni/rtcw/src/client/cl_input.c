@@ -436,20 +436,10 @@ void CL_AdjustAngles( void ) {
 
 
 
-	cl.viewangles[YAW] -= old_move.yaw;
-	cl.viewangles[YAW] += new_move.yaw;
-
-	//Make angles good
-	while (cl.viewangles[YAW] > 180.0f)
-		cl.viewangles[YAW] -= 360.0f;
-	while (cl.viewangles[YAW] < -180.0f)
-		cl.viewangles[YAW] += 360.0f;
-
-	cl.viewangles[PITCH] = new_move.pitch;
-
-	cl.viewangles[ROLL] = new_move.roll;
-
-    VectorCopy(cl.viewangles, vr.clientviewangles);
+	// VR updates the real command angles in CL_FinishMove, after mouse/key input
+	// has been accumulated.  Keeping it there matches the later OpenXR ports and
+	// avoids the old pre-move yaw compensation path fighting movement direction.
+	VectorCopy(cl.viewangles, vr.clientviewangles);
 }
 
 /*
@@ -598,15 +588,6 @@ void CL_JoystickMove( usercmd_t *cmd ) {
 	cmd->upmove = ClampChar( cmd->upmove + cl.joystickAxis[AXIS_UP] );
  */
 
-	cmd->forwardmove = ClampChar( cmd->forwardmove + (new_move.forward * 127) + (new_move.pos_forward * 127));
-	cmd->rightmove = ClampChar( cmd->rightmove + (new_move.side * 127) + (new_move.pos_side * 127));
-
-	float moveMagnitude = sqrt(new_move.forward * new_move.forward + new_move.side * new_move.side);
-	if(moveMagnitude < 0.35)
-	{
-		// Triggers silent-stepping
-		cmd->buttons |= BUTTON_WALKING;
-	}
 }
 
 /*
@@ -809,6 +790,75 @@ void CL_FinishMove( usercmd_t *cmd ) {
 	// can be determined without allowing cheating
 	cmd->serverTime = cl.serverTime;
 
+#ifdef __ANDROID__
+	{
+		static float lastHmdYaw = 0.0f;
+		static int lastMoveLogTime = 0;
+		static qboolean haveHmd = qfalse;
+		float hmdYaw = vr.hmdorientation[YAW];
+		float hmdDelta = 0.0f;
+		float turnDelta;
+		float moveMagnitude;
+
+		if ( haveHmd ) {
+			hmdDelta = hmdYaw - lastHmdYaw;
+			while ( hmdDelta > 180.0f ) {
+				hmdDelta -= 360.0f;
+			}
+			while ( hmdDelta < -180.0f ) {
+				hmdDelta += 360.0f;
+			}
+			cl.viewangles[YAW] += hmdDelta;
+		}
+		lastHmdYaw = hmdYaw;
+		haveHmd = qtrue;
+
+		turnDelta = new_move.yaw - old_move.yaw;
+		while ( turnDelta > 180.0f ) {
+			turnDelta -= 360.0f;
+		}
+		while ( turnDelta < -180.0f ) {
+			turnDelta += 360.0f;
+		}
+		cl.viewangles[YAW] += turnDelta;
+
+		while ( cl.viewangles[YAW] > 180.0f ) {
+			cl.viewangles[YAW] -= 360.0f;
+		}
+		while ( cl.viewangles[YAW] < -180.0f ) {
+			cl.viewangles[YAW] += 360.0f;
+		}
+
+		cl.viewangles[PITCH] = vr.hmdorientation[PITCH] - SHORT2ANGLE( cl.snap.ps.delta_angles[PITCH] );
+		cl.viewangles[ROLL] = 0.0f;
+		VectorCopy( cl.viewangles, vr.clientviewangles );
+		vr.clientview_hmd_yaw = hmdYaw;
+		vr.clientview_hmd_yaw_valid = qtrue;
+
+		cmd->forwardmove = ClampChar( cmd->forwardmove
+			+ (int)( new_move.forward * 127.0f )
+			+ (int)( new_move.pos_forward * 127.0f ) );
+		cmd->rightmove = ClampChar( cmd->rightmove
+			+ (int)( new_move.side * 127.0f )
+			+ (int)( new_move.pos_side * 127.0f ) );
+		cmd->upmove = ClampChar( cmd->upmove + (int)( new_move.up * 127.0f ) );
+
+		moveMagnitude = sqrt( new_move.forward * new_move.forward + new_move.side * new_move.side );
+		if ( moveMagnitude > 0.01f && moveMagnitude < 0.35f ) {
+			cmd->buttons |= BUTTON_WALKING;
+		}
+
+		if ( cl.serverTime > lastMoveLogTime + 1000 ) {
+			lastMoveLogTime = cl.serverTime;
+			Com_Printf( "VR move probe: hmdYaw=%.2f hmdDelta=%.2f snapYaw=%.2f oldSnapYaw=%.2f turnDelta=%.2f viewYaw=%.2f fwd=%.2f side=%.2f posFwd=%.2f posSide=%.2f cmdF=%d cmdR=%d cmdU=%d\n",
+						hmdYaw, hmdDelta, new_move.yaw, old_move.yaw, turnDelta,
+						cl.viewangles[YAW], new_move.forward, new_move.side,
+						new_move.pos_forward, new_move.pos_side,
+						cmd->forwardmove, cmd->rightmove, cmd->upmove );
+		}
+	}
+#endif
+
 	for ( i = 0 ; i < 3 ; i++ ) {
 		cmd->angles[i] = ANGLE2SHORT( cl.viewangles[i] );
 	}
@@ -871,10 +921,10 @@ usercmd_t CL_CreateCmd( void ) {
 	// draw debug graphs of turning for mouse testing
 	if ( cl_debugMove->integer ) {
 		if ( cl_debugMove->integer == 1 ) {
-			SCR_DebugGraph( abs( cl.viewangles[YAW] - oldAngles[YAW] ), 0 );
+			SCR_DebugGraph( fabsf( cl.viewangles[YAW] - oldAngles[YAW] ), 0 );
 		}
 		if ( cl_debugMove->integer == 2 ) {
-			SCR_DebugGraph( abs( cl.viewangles[PITCH] - oldAngles[PITCH] ), 0 );
+			SCR_DebugGraph( fabsf( cl.viewangles[PITCH] - oldAngles[PITCH] ), 0 );
 		}
 	}
 

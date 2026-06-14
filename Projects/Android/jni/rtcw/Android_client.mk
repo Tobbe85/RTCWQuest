@@ -14,7 +14,9 @@ LOCAL_LDFLAGS = $(RTCW_BASE_LDFLAGS)
 
 LOCAL_C_INCLUDES = $(LOCAL_PATH) \
                 $(GL4ES_PATH) \
-				$(GL4ES_PATH)/include
+				$(GL4ES_PATH)/include \
+				$(TOP_DIR)/RTCWVR \
+				$(TOP_DIR)/RTCWVR/openxr
 
  
 ANDROID_SRC = \
@@ -198,7 +200,8 @@ SERVER_FILES = \
    
 
 RTCWVR_SRC_FILES :=  ../RTCWVR/RTCWVR_SurfaceView.c \
-       ../RTCWVR/VrCompositor.c \
+       ../RTCWVR/TBXR_Common.c \
+       ../RTCWVR/OpenXrInput.c \
        ../RTCWVR/VrInputCommon.c \
        ../RTCWVR/VrInputWeaponAlign.c \
        ../RTCWVR/VrInputDefault.c \
@@ -211,16 +214,9 @@ LOCAL_SRC_FILES =  $(UNIX_FILES) $(RENDERER_FILES) $(SPLINES_FILES) $(BOTLIB_FIL
 
 LOCAL_LDLIBS := -lGLESv3 -landroid -lEGL -ldl -llog -lOpenSLES -lz -lm
 
-LOCAL_LDLIBS += -fuse-ld=bfd
  
 # LOCAL_STATIC_LIBRARIES :=  libjpeg libpng
-LOCAL_SHARED_LIBRARIES :=  vrapi gl4es
+LOCAL_SHARED_LIBRARIES :=  openxr_loader gl4es
 
 include $(BUILD_SHARED_LIBRARY)
-
-
-$(call import-module,VrApi/Projects/AndroidPrebuilt/jni)
-
-
-
 

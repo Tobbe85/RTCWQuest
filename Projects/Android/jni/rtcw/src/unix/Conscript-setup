@@ -22,7 +22,7 @@ sub launch {
 
 Depends $env 'foo',
   'out/wolfsp.arm',
-  'out/' . $BASEGAME . '/cgamearm.so',
-  'out/' . $BASEGAME . '/qagamearm.so',
-  'out/' . $BASEGAME . '/uiarm.so';
+  'out/' . $BASEGAME . '/cgame.so',
+  'out/' . $BASEGAME . '/qagame.so',
+  'out/' . $BASEGAME . '/ui.so';
 Command $env 'foo', "[perl] &launch()";

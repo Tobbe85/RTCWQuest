@@ -28,9 +28,210 @@ If you have questions concerning this license or the applicable additional terms
 
 #include "tr_local.h"
 
+#ifndef GL_FRAMEBUFFER_BINDING
+#define GL_FRAMEBUFFER_BINDING 0x8CA6
+#endif
+
 volatile renderCommandList_t    *renderCommandList;
 
 volatile qboolean renderThreadActive;
+
+qboolean VR_GetFovTangentsForEye(int eye, float *tanLeft, float *tanRight, float *tanUp, float *tanDown);
+float VR_GetEyeStereoSeparation(int eye);
+
+typedef union {
+	void    *align;
+	byte    cmds[MAX_RENDER_COMMANDS + sizeof( int ) + sizeof( void * )];
+} vrStereoReplayBuffer_t;
+
+static vrStereoReplayBuffer_t vrStereoReplayCommands;
+static vrStereoReplayBuffer_t vrStereoReplayScratch;
+static int vrStereoReplayCommandBytes;
+static qboolean vrStereoReplayActive;
+static qboolean vrStereoReplayLoggedInvalid;
+
+typedef struct {
+	int drawBuffers;
+	int drawSurfs;
+	int stretchPics;
+	int flushes;
+	int swaps;
+} vrStereoReplayStats_t;
+
+static qboolean R_VR_InspectStereoReplayCommands( const byte *cmds, vrStereoReplayStats_t *stats ) {
+	const void *curCmd = cmds;
+
+	memset( stats, 0, sizeof( *stats ) );
+
+	while ( 1 ) {
+		switch ( *(const int *)curCmd ) {
+		case RC_SET_COLOR:
+			curCmd = (const void *)( (const setColorCommand_t *)curCmd + 1 );
+			break;
+		case RC_STRETCH_PIC:
+		case RC_STRETCH_PIC_GRADIENT:
+			stats->stretchPics++;
+			curCmd = (const void *)( (const stretchPicCommand_t *)curCmd + 1 );
+			break;
+		case RC_DRAW_SURFS:
+			stats->drawSurfs++;
+			curCmd = (const void *)( (const drawSurfsCommand_t *)curCmd + 1 );
+			break;
+		case RC_DRAW_BUFFER:
+			stats->drawBuffers++;
+			curCmd = (const void *)( (const drawBufferCommand_t *)curCmd + 1 );
+			break;
+		case RC_FLUSH:
+			stats->flushes++;
+			curCmd = (const void *)( (const swapBuffersCommand_t *)curCmd + 1 );
+			break;
+		case RC_SWAP_BUFFERS:
+			stats->swaps++;
+			curCmd = (const void *)( (const swapBuffersCommand_t *)curCmd + 1 );
+			break;
+		case RC_END_OF_LIST:
+			return qtrue;
+		default:
+			return qfalse;
+		}
+	}
+}
+
+static void R_VR_GetHudReplayOffset( stereoFrame_t stereoFrame, float *x, float *y ) {
+	int eye;
+	float tanLeft, tanRight, tanUp, tanDown;
+	float angleLeft, angleRight, angleUp, angleDown;
+	float offX640, offY480;
+	float unionLeft, unionRight, unionUp, unionDown;
+	float fovXRad;
+	float depth;
+	float parallax;
+	cvar_t *hudDepth;
+
+	*x = 0.0f;
+	*y = 0.0f;
+
+	if ( stereoFrame != STEREO_LEFT && stereoFrame != STEREO_RIGHT ) {
+		return;
+	}
+
+	eye = ( stereoFrame == STEREO_LEFT ) ? 0 : 1;
+	if ( !VR_GetFovTangentsForEye( eye, &tanLeft, &tanRight, &tanUp, &tanDown ) ) {
+		return;
+	}
+
+	angleLeft = atan( tanLeft );
+	angleRight = atan( tanRight );
+	angleUp = atan( tanUp );
+	angleDown = atan( tanDown );
+
+	offX640 = -0.5f * ( angleLeft + angleRight ) * 640.0f;
+	offY480 = -0.5f * ( angleUp + angleDown ) * 480.0f;
+
+	if ( VR_GetFovTangentsForEye( -1, &unionLeft, &unionRight, &unionUp, &unionDown ) ) {
+		fovXRad = fabs( atan( unionLeft ) ) + fabs( atan( unionRight ) );
+	} else {
+		fovXRad = fabs( angleLeft ) + fabs( angleRight );
+	}
+	if ( fovXRad < 1.0f * (float)M_PI / 180.0f ) {
+		fovXRad = 90.0f * (float)M_PI / 180.0f;
+	}
+
+	hudDepth = ri.Cvar_Get( "cg_hudDepth", "2.0", 0 );
+	depth = hudDepth ? hudDepth->value : 2.0f;
+	if ( depth < 0.5f ) {
+		depth = 0.5f;
+	}
+	parallax = ( atan2( 0.032f, depth ) / ( fovXRad * 0.5f ) ) * 320.0f;
+
+	if ( eye == 1 ) {
+		offX640 -= 2.0f * parallax;
+	}
+
+	*x = offX640 * ( (float)glConfig.vidWidth / 640.0f );
+	*y = -offY480 * ( (float)glConfig.vidHeight / 480.0f );
+}
+
+static void R_VR_PatchStretchPicCommand( stretchPicCommand_t *cmd, stereoFrame_t stereoFrame ) {
+	float x, y;
+
+	if ( cmd->x <= 1.0f && cmd->y <= 1.0f &&
+		 cmd->w >= glConfig.vidWidth - 2.0f &&
+		 cmd->h >= glConfig.vidHeight - 2.0f ) {
+		return;
+	}
+
+	R_VR_GetHudReplayOffset( stereoFrame, &x, &y );
+	cmd->x += x;
+	cmd->y += y;
+}
+
+static void R_VR_PatchDrawSurfsCommand( drawSurfsCommand_t *cmd, stereoFrame_t stereoFrame ) {
+	int eye;
+	trRefdef_t savedRefdef;
+	viewParms_t savedViewParms;
+
+	if ( stereoFrame != STEREO_LEFT && stereoFrame != STEREO_RIGHT ) {
+		return;
+	}
+
+	eye = ( stereoFrame == STEREO_LEFT ) ? 0 : 1;
+	cmd->refdef.stereoView = stereoFrame;
+	cmd->viewParms.stereoFrame = stereoFrame;
+
+	if ( !( cmd->refdef.rdflags & RDF_NOWORLDMODEL ) &&
+		 !( cmd->refdef.rdflags & RDF_SKYBOXPORTAL ) ) {
+		float sep = VR_GetEyeStereoSeparation( eye ) * cmd->refdef.worldscale;
+		VectorMA( cmd->refdef.vieworg, sep, cmd->refdef.viewaxis[1], cmd->refdef.vieworg );
+		VectorCopy( cmd->refdef.vieworg, cmd->viewParms.or.origin );
+		VectorCopy( cmd->refdef.vieworg, cmd->viewParms.pvsOrigin );
+	}
+
+	savedRefdef = tr.refdef;
+	savedViewParms = tr.viewParms;
+	tr.refdef = cmd->refdef;
+	tr.viewParms = cmd->viewParms;
+	R_SetupProjection();
+	R_SetupFrustum();
+	cmd->viewParms = tr.viewParms;
+	tr.refdef = savedRefdef;
+	tr.viewParms = savedViewParms;
+}
+
+static void R_VR_PatchStereoReplayCommands( byte *cmds, stereoFrame_t stereoFrame ) {
+	void *curCmd = cmds;
+	qboolean seenDrawSurfs = qfalse;
+
+	while ( 1 ) {
+		switch ( *(int *)curCmd ) {
+		case RC_SET_COLOR:
+			curCmd = (void *)( (setColorCommand_t *)curCmd + 1 );
+			break;
+		case RC_STRETCH_PIC:
+		case RC_STRETCH_PIC_GRADIENT:
+			if ( seenDrawSurfs ) {
+				R_VR_PatchStretchPicCommand( (stretchPicCommand_t *)curCmd, stereoFrame );
+			}
+			curCmd = (void *)( (stretchPicCommand_t *)curCmd + 1 );
+			break;
+		case RC_DRAW_SURFS:
+			R_VR_PatchDrawSurfsCommand( (drawSurfsCommand_t *)curCmd, stereoFrame );
+			seenDrawSurfs = qtrue;
+			curCmd = (void *)( (drawSurfsCommand_t *)curCmd + 1 );
+			break;
+		case RC_DRAW_BUFFER:
+			curCmd = (void *)( (drawBufferCommand_t *)curCmd + 1 );
+			break;
+		case RC_SWAP_BUFFERS:
+		case RC_FLUSH:
+			curCmd = (void *)( (swapBuffersCommand_t *)curCmd + 1 );
+			break;
+		case RC_END_OF_LIST:
+		default:
+			return;
+		}
+	}
+}
 
 
 /*
@@ -123,11 +324,31 @@ int c_blockedOnMain;
 
 void R_IssueRenderCommands( qboolean runPerformanceCounters ) {
 	renderCommandList_t *cmdList;
+	vrStereoReplayStats_t stats;
+	qboolean statsValid;
+	int usedBytes;
+	static int issueLogs;
 
 	cmdList = &backEndData[tr.smpFrame]->commands;
 	assert( cmdList ); // bk001205
 	// add an end-of-list command
 	*( int * )( cmdList->cmds + cmdList->used ) = RC_END_OF_LIST;
+	usedBytes = cmdList->used;
+	statsValid = R_VR_InspectStereoReplayCommands( cmdList->cmds, &stats );
+	if ( issueLogs++ < 40 || ( issueLogs % 300 ) == 0 ) {
+		ri.Printf( PRINT_ALL,
+				   "VR render issue: bytes=%d valid=%d drawBuffers=%d drawSurfs=%d stretchPics=%d flushes=%d swaps=%d perf=%d frame=%d smp=%d\n",
+				   usedBytes,
+				   statsValid,
+				   stats.drawBuffers,
+				   stats.drawSurfs,
+				   stats.stretchPics,
+				   stats.flushes,
+				   stats.swaps,
+				   runPerformanceCounters,
+				   tr.frameCount,
+				   tr.smpFrame );
+	}
 
 	// clear it out, in case this is a sync and not a buffer flip
 	cmdList->used = 0;
@@ -345,6 +566,7 @@ for each RE_EndFrame
 */
 void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 	drawBufferCommand_t *cmd;
+	static int beginLogs;
 
 	if ( !tr.registered ) {
 		return;
@@ -353,6 +575,17 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 
 	tr.frameCount++;
 	tr.frameSceneNum = 0;
+	if ( beginLogs++ < 40 || ( beginLogs % 300 ) == 0 ) {
+		GLint fb = 0;
+		qglGetIntegerv( GL_FRAMEBUFFER_BINDING, &fb );
+		ri.Printf( PRINT_ALL,
+				   "VR RE_BeginFrame: stereo=%d frame=%d fbo=%d vid=%dx%d\n",
+				   stereoFrame,
+				   tr.frameCount,
+				   fb,
+				   glConfig.vidWidth,
+				   glConfig.vidHeight );
+	}
 
 	//
 	// do overdraw measurement
@@ -502,7 +735,7 @@ void RE_BeginFrame( stereoFrame_t stereoFrame ) {
 	cmd->commandId = RC_DRAW_BUFFER;
 
 	{
-		if ( stereoFrame == STEREO_LEFT ) {
+		if ( stereoFrame == STEREO_LEFT || stereoFrame == STEREO_CENTER ) {
 			cmd->buffer = (int)0;
 		} else if ( stereoFrame == STEREO_RIGHT ) {
 			cmd->buffer = (int)1;
@@ -548,6 +781,7 @@ Returns the number of msec spent in the back end
 void RE_EndFrame( int stereoFrame, int *frontEndMsec, int *backEndMsec ) {
 
     swapBuffersCommand_t    *cmd;
+	static int endLogs;
 
     if ( !tr.registered ) {
         return;
@@ -559,6 +793,15 @@ void RE_EndFrame( int stereoFrame, int *frontEndMsec, int *backEndMsec ) {
     }
 
     cmd->commandId = RC_FLUSH;
+	if ( endLogs++ < 40 || ( endLogs % 300 ) == 0 ) {
+		GLint fb = 0;
+		qglGetIntegerv( GL_FRAMEBUFFER_BINDING, &fb );
+		ri.Printf( PRINT_ALL,
+				   "VR RE_EndFrame: stereo=%d frame=%d fbo=%d\n",
+				   stereoFrame,
+				   tr.frameCount,
+				   fb );
+	}
 
     R_IssueRenderCommands( qfalse );
 
@@ -582,6 +825,7 @@ Returns the number of msec spent in the back end
 */
 void RE_SubmitStereoFrame( ) {
     swapBuffersCommand_t    *cmd;
+	static int submitLogs;
 
     if ( !tr.registered ) {
         return;
@@ -593,10 +837,102 @@ void RE_SubmitStereoFrame( ) {
     }
 
     cmd->commandId = RC_SWAP_BUFFERS;
+	if ( submitLogs++ < 40 || ( submitLogs % 300 ) == 0 ) {
+		GLint fb = 0;
+		qglGetIntegerv( GL_FRAMEBUFFER_BINDING, &fb );
+		ri.Printf( PRINT_ALL,
+				   "VR RE_SubmitStereoFrame: frame=%d fbo=%d\n",
+				   tr.frameCount,
+				   fb );
+	}
 
     R_IssueRenderCommands( qtrue );
 
     // use the other buffers next frame, because another CPU
     // may still be rendering into the current ones
     R_ToggleSmpFrame();
+}
+
+qboolean RE_VR_BeginStereoReplayCapture( void ) {
+	if ( !tr.registered ) {
+		return qfalse;
+	}
+
+	vrStereoReplayActive = qfalse;
+	vrStereoReplayCommandBytes = 0;
+	return qtrue;
+}
+
+void RE_VR_CancelStereoReplayCapture( void ) {
+	vrStereoReplayActive = qfalse;
+	vrStereoReplayCommandBytes = 0;
+	R_ToggleSmpFrame();
+}
+
+qboolean RE_VR_ReplayStereoFrame( stereoFrame_t stereoFrame, qboolean finalReplay ) {
+	renderCommandList_t *cmdList;
+	swapBuffersCommand_t *cmd;
+	vrStereoReplayStats_t stats;
+	static qboolean loggedReplayStats = qfalse;
+
+	if ( !tr.registered ) {
+		return qfalse;
+	}
+
+	cmdList = &backEndData[tr.smpFrame]->commands;
+
+	if ( !vrStereoReplayActive ) {
+		cmd = R_GetCommandBuffer( sizeof( *cmd ) );
+		if ( !cmd ) {
+			RE_VR_CancelStereoReplayCapture();
+			return qfalse;
+		}
+		cmd->commandId = RC_SWAP_BUFFERS;
+
+		*( int * )( cmdList->cmds + cmdList->used ) = RC_END_OF_LIST;
+		vrStereoReplayCommandBytes = cmdList->used + sizeof( int );
+		if ( vrStereoReplayCommandBytes > (int)sizeof( vrStereoReplayCommands.cmds ) ) {
+			RE_VR_CancelStereoReplayCapture();
+			return qfalse;
+		}
+
+		memcpy( vrStereoReplayCommands.cmds, cmdList->cmds, vrStereoReplayCommandBytes );
+		if ( !R_VR_InspectStereoReplayCommands( vrStereoReplayCommands.cmds, &stats ) ||
+			 ( stats.drawSurfs == 0 && stats.stretchPics == 0 ) ) {
+			if ( !vrStereoReplayLoggedInvalid ) {
+				ri.Printf( PRINT_WARNING,
+						   "VR stereo replay: invalid captured command stream (%d bytes, drawSurfs=%d, stretchPics=%d, swaps=%d).\n",
+						   vrStereoReplayCommandBytes, stats.drawSurfs, stats.stretchPics, stats.swaps );
+				vrStereoReplayLoggedInvalid = qtrue;
+			}
+			RE_VR_CancelStereoReplayCapture();
+			return qfalse;
+		}
+		if ( !loggedReplayStats ) {
+			ri.Printf( PRINT_ALL,
+					   "VR stereo replay: captured %d bytes (%d drawSurfs, %d stretchPics, %d swaps).\n",
+					   vrStereoReplayCommandBytes, stats.drawSurfs, stats.stretchPics, stats.swaps );
+			loggedReplayStats = qtrue;
+		}
+		vrStereoReplayActive = qtrue;
+		cmdList->used = 0;
+	}
+
+	memcpy( vrStereoReplayScratch.cmds, vrStereoReplayCommands.cmds, vrStereoReplayCommandBytes );
+	R_VR_PatchStereoReplayCommands( vrStereoReplayScratch.cmds, stereoFrame );
+
+	if ( !r_skipBackEnd->integer ) {
+		RB_ExecuteRenderCommands( vrStereoReplayScratch.cmds );
+	}
+
+	if ( finalReplay ) {
+		R_PerformanceCounters();
+		R_ToggleSmpFrame();
+		vrStereoReplayActive = qfalse;
+		vrStereoReplayCommandBytes = 0;
+		tr.frontEndMsec = 0;
+		backEnd.pc.msec = 0;
+	}
+
+	return qtrue;
 }
