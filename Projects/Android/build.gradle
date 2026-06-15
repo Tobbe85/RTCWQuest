@@ -19,7 +19,7 @@ android {
     defaultConfig {
         applicationId "com.drbeef." + project.archivesBaseName
         minSdkVersion 29
-        targetSdkVersion 32
+        targetSdkVersion 29
 
         externalNativeBuild {
             ndk {

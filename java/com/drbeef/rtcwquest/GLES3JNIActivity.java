@@ -66,9 +66,9 @@ import static android.system.Os.setenv;
 	private static final String APPLICATION = "RTCWQuest";
 
 	private boolean permissionsGranted = false;
-	private static final int READ_EXTERNAL_STORAGE_PERMISSION_ID = 1;
 	private static final int WRITE_EXTERNAL_STORAGE_PERMISSION_ID = 2;
-	private static final int MANAGE_EXTERNAL_STORAGE_PERMISSION_ID = 3;
+
+	private int permissionAttempt = 0;
 
 	String commandLineParams;
 
@@ -204,29 +204,20 @@ import static android.system.Os.setenv;
 
 	/** Initializes the Activity only if the permission has been granted. */
 	private void checkPermissionsAndInitialize() {
-		// Boilerplate for checking runtime permissions in Android.
-		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
-				ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
-				!= PackageManager.PERMISSION_GRANTED){
-			ActivityCompat.requestPermissions(
-					GLES3JNIActivity.this,
-					new String[] {Manifest.permission.WRITE_EXTERNAL_STORAGE},
-					WRITE_EXTERNAL_STORAGE_PERMISSION_ID);
-		} else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
-				ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
-				!= PackageManager.PERMISSION_GRANTED){
-			ActivityCompat.requestPermissions(
-					GLES3JNIActivity.this,
-					new String[] {Manifest.permission.READ_EXTERNAL_STORAGE},
-					READ_EXTERNAL_STORAGE_PERMISSION_ID);
-		}
-		else
-		{
-			permissionsGranted = true;
+		if (mNativeHandle != 0) {
+			return;
 		}
 
-		if (permissionsGranted) {
-			// Permissions have already been granted.
+		if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+				!= PackageManager.PERMISSION_GRANTED) {
+			ActivityCompat.requestPermissions(
+					this,
+					new String[] {
+							Manifest.permission.READ_EXTERNAL_STORAGE,
+							Manifest.permission.WRITE_EXTERNAL_STORAGE
+					},
+					WRITE_EXTERNAL_STORAGE_PERMISSION_ID);
+		} else {
 			create();
 		}
 	}
@@ -234,26 +225,31 @@ import static android.system.Os.setenv;
 	/** Handles the user accepting the permission. */
 	@Override
 	public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-		if (requestCode == READ_EXTERNAL_STORAGE_PERMISSION_ID) {
-			if (results.length > 0 && results[0] != PackageManager.PERMISSION_GRANTED) {
-				System.exit(0);
-			}
-		}
+		super.onRequestPermissionsResult(requestCode, permissions, results);
 
 		if (requestCode == WRITE_EXTERNAL_STORAGE_PERMISSION_ID) {
-			if (results.length > 0 && results[0] != PackageManager.PERMISSION_GRANTED) {
+			permissionAttempt++;
+
+			boolean granted = false;
+			if (results != null) {
+				for (int result : results) {
+					if (result == PackageManager.PERMISSION_GRANTED) {
+						granted = true;
+						break;
+					}
+				}
+			}
+
+			if (granted) {
+				create();
+				return;
+			}
+
+			if (permissionAttempt < 5) {
+				checkPermissionsAndInitialize();
+			} else {
 				System.exit(0);
 			}
-		}
-
-		checkPermissionsAndInitialize();
-	}
-
-	@Override
-	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
-		super.onActivityResult(requestCode, resultCode, data);
-		if (requestCode == MANAGE_EXTERNAL_STORAGE_PERMISSION_ID) {
-			checkPermissionsAndInitialize();
 		}
 	}
 
