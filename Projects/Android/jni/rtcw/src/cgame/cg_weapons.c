@@ -3182,9 +3182,11 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 		brassOffset[WP_VENOM] = 5;
 
 		if ( brassOffset[weaponNum] != 0) {
-			//Correct bad tag on certain models
-			CG_CalcMuzzlePoint(cent->currentState.clientNum, brassOffset[weaponNum], brass.origin);
+			//Correct bad tag on certain models - derive from the positioned gun
+			//rather than re-entering CG_CalcMuzzlePoint (see muzzle flash code).
 			MatrixMultiply( brass.axis, gun.axis, brass.axis );
+			VectorCopy( gun.origin, brass.origin );
+			VectorMA( brass.origin, brassOffset[weaponNum], gun.axis[0], brass.origin );
 		} else {
 			CG_PositionRotatedEntityOnTag( &brass, &gun, "tag_brass" );
 		}
@@ -3327,17 +3329,38 @@ void CG_AddPlayerWeapon( refEntity_t *parent, playerState_t *ps, centity_t *cent
 	flashOffset[WP_VENOM] = 18;
 	flashOffset[WP_GARAND] = 30;
 
+	// Per-weapon muzzle tuning (game units; ~3.75 = 10cm) along gun forward/right/up.
+	float flashNudgeForward[WP_NUM_WEAPONS];
+	float flashNudgeRight[WP_NUM_WEAPONS];
+	float flashNudgeUp[WP_NUM_WEAPONS];
+	memset (flashNudgeForward, 0, sizeof flashNudgeForward);
+	memset (flashNudgeRight, 0, sizeof flashNudgeRight);
+	memset (flashNudgeUp, 0, sizeof flashNudgeUp);
+	flashNudgeForward[WP_TESLA]  = 14.8f; flashNudgeRight[WP_TESLA]  = 4.5f;  flashNudgeUp[WP_TESLA]  = 1.0f;
+	flashNudgeForward[WP_VENOM]  = 0.0f;  flashNudgeRight[WP_VENOM]  = 4.0f;  flashNudgeUp[WP_VENOM]  = -4.0f;
+
 	if (flashOffset[weaponNum] == 0) {
 		CG_PositionRotatedEntityOnTag(&flash, &gun, "tag_flash");
 	}
 	else
 	{
-		//Set the origin of the flash to be a distance forward of the controller
-		//Corrects the confused tag in the altered models
-        CG_CalcMuzzlePoint(cent->currentState.clientNum, flashOffset[weaponNum], flash.origin);
-        MatrixMultiply( flash.axis, gun.axis, flash.axis );
+		// tag_flash is wrong on these altered models, so build the muzzle from the
+		// positioned gun.  Not via CG_CalcMuzzlePoint - it re-reads the muzzle
+		// cache written below.  gun.axis is scaled, so normalise for real units.
+		MatrixMultiply( flash.axis, gun.axis, flash.axis );
 
-    }
+		vec3_t gunFwd, gunLeft, gunUp;
+		VectorCopy( gun.axis[0], gunFwd );  VectorNormalize( gunFwd );
+		VectorCopy( gun.axis[1], gunLeft ); VectorNormalize( gunLeft );
+		VectorCopy( gun.axis[2], gunUp );   VectorNormalize( gunUp );
+
+		// gunLeft is 'left' (mirrored for left-handers), so right = -gunLeft.
+		float nudgeRightSign = cgVR->right_handed ? -1.0f : 1.0f;
+		VectorCopy( gun.origin, flash.origin );
+		VectorMA( flash.origin, flashOffset[weaponNum] + flashNudgeForward[weaponNum], gunFwd,  flash.origin );
+		VectorMA( flash.origin, nudgeRightSign * flashNudgeRight[weaponNum],           gunLeft, flash.origin );
+		VectorMA( flash.origin, flashNudgeUp[weaponNum],                               gunUp,   flash.origin );
+	}
 
 	if ( isPlayer && ps && cgVR && !cgVR->screen && !cgVR->cin_camera ) {
 		VectorCopy( flash.origin, cgVRLocalMuzzleOrigin );

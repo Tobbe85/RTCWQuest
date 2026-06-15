@@ -205,15 +205,33 @@ import static android.system.Os.setenv;
 	/** Initializes the Activity only if the permission has been granted. */
 	private void checkPermissionsAndInitialize() {
 		// Boilerplate for checking runtime permissions in Android.
-		if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
-				ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
+		if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+			// Android 11+: legacy READ/WRITE_EXTERNAL_STORAGE are ineffective at this
+			// targetSdk, so the game data folder needs "All files access"
+			// (MANAGE_EXTERNAL_STORAGE).  That can only be granted from a system
+			// settings screen, not a runtime dialog, so send the user there.
+			if (Environment.isExternalStorageManager()) {
+				permissionsGranted = true;
+			} else {
+				try {
+					startActivityForResult(
+							new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+									Uri.parse("package:" + getPackageName())),
+							MANAGE_EXTERNAL_STORAGE_PERMISSION_ID);
+				} catch (Exception e) {
+					// Some devices don't expose the per-app screen; fall back to the list.
+					startActivityForResult(
+							new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION),
+							MANAGE_EXTERNAL_STORAGE_PERMISSION_ID);
+				}
+			}
+		} else if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
 				!= PackageManager.PERMISSION_GRANTED){
 			ActivityCompat.requestPermissions(
 					GLES3JNIActivity.this,
 					new String[] {Manifest.permission.WRITE_EXTERNAL_STORAGE},
 					WRITE_EXTERNAL_STORAGE_PERMISSION_ID);
-		} else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R &&
-				ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
+		} else if (ContextCompat.checkSelfPermission(this, Manifest.permission.READ_EXTERNAL_STORAGE)
 				!= PackageManager.PERMISSION_GRANTED){
 			ActivityCompat.requestPermissions(
 					GLES3JNIActivity.this,
@@ -253,7 +271,13 @@ import static android.system.Os.setenv;
 	protected void onActivityResult(int requestCode, int resultCode, Intent data) {
 		super.onActivityResult(requestCode, resultCode, data);
 		if (requestCode == MANAGE_EXTERNAL_STORAGE_PERMISSION_ID) {
-			checkPermissionsAndInitialize();
+			// Returned from the All-files-access settings screen.  Bail if it still
+			// isn't granted, otherwise we'd just bounce the user straight back there.
+			if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && !Environment.isExternalStorageManager()) {
+				System.exit(0);
+			} else {
+				checkPermissionsAndInitialize();
+			}
 		}
 	}
 
