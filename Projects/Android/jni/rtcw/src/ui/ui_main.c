@@ -4676,10 +4676,12 @@ static void UI_RunMenuScript( char **args ) {
 			UI_LoadSavegames( NULL );
 		} else if ( Q_stricmp( name, "Loadgame" ) == 0 ) {
 			int i = UI_SavegameIndexFromName2( ui_savegameName.string );
-			// in developer, don't actually load the game
-			if ( DC->getCVarValue( "developer" ) ) {
-				Com_Printf( "would load game (developer 0):\n   %s\n", uiInfo.savegameList[i].savegameFile );
+			if ( uiInfo.savegameCount <= 0 || !ui_savegameName.string[0] || i < 0 || i >= uiInfo.savegameCount ) {
+				Com_Printf( "SAVELOAD UI Loadgame rejected count=%i selected='%s' index=%i\n",
+							uiInfo.savegameCount, ui_savegameName.string, i );
 			} else {
+				Com_Printf( "SAVELOAD UI Loadgame executing selected='%s' file='%s' index=%i developer=%g\n",
+							ui_savegameName.string, uiInfo.savegameList[i].savegameFile, i, DC->getCVarValue( "developer" ) );
 				trap_Cmd_ExecuteText( EXEC_APPEND, va( "loadgame %s\n", uiInfo.savegameList[i].savegameFile ) );
 			}
 

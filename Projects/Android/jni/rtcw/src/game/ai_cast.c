@@ -757,6 +757,7 @@ void AICast_CheckLoadGame( void ) {
 	gentity_t *ent = NULL; // TTimo: VC6 'may be used without having been init'
 	qboolean ready;
 	cast_state_t *pcs;
+	static int lastSaveLoadLogTime;
 
 	// have we already done the save or load?
 	if ( !saveGamePending ) {
@@ -791,7 +792,16 @@ void AICast_CheckLoadGame( void ) {
 			ready = qfalse;
 		}
 
+		if ( !ready && level.time - lastSaveLoadLogTime > 1000 ) {
+			G_Printf( "SAVELOAD AICast_CheckLoadGame waiting loading=%s numSpawningCast=%i numcast=%i player=%i client=%i connected=%i\n",
+					  loading, numSpawningCast, numcast, ent ? ent->s.number : -1,
+					  ( ent && ent->client ) ? 1 : 0,
+					  ( ent && ent->client ) ? ent->client->pers.connected : -1 );
+			lastSaveLoadLogTime = level.time;
+		}
+
 		if ( ready ) {
+			G_Printf( "SAVELOAD AICast_CheckLoadGame ready: calling G_LoadGame loading=%s leveltime=%i\n", loading, level.time );
 			trap_Cvar_Set( "savegame_loading", "0" ); // in-case it aborts
 			saveGamePending = qfalse;
 			G_LoadGame( NULL );     // always load the "current" savegame

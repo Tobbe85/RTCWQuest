@@ -576,7 +576,189 @@ void G_Save_Decode( byte *in, int insize, byte *out, int outsize ) {
 
 //=========================================================
 
-byte clientBuf[ 2 * sizeof( gentity_t ) ];
+#define LEGACY32_GENTITY_SIZE      1416
+#define LEGACY32_GCLIENT_SIZE      2104
+#define LEGACY32_GCLIENT_SIZE_OLD_WEAPONS 2096
+#define LEGACY32_CAST_STATE_SIZE   15236
+
+typedef struct {
+	int oldOfs;
+	int newOfs;
+	int oldSize;
+	int newSize;
+	qboolean restore;
+} legacyPointerField_t;
+
+static const legacyPointerField_t legacy32EntityPointers[] = {
+	{ 680, 680, 4, 8, qtrue }, // client
+	{ 688, 696, 4, 8, qtrue }, // classname
+	{ 704, 720, 4, 8, qtrue }, // model
+	{ 708, 728, 4, 8, qtrue }, // model2
+	{ 800, 824, 4, 8, qtrue }, // parent
+	{ 804, 832, 4, 8, qtrue }, // nextTrain
+	{ 808, 840, 4, 8, qtrue }, // prevTrain
+	{ 848, 888, 4, 8, qtrue }, // message
+	{ 860, 904, 4, 8, qtrue }, // target
+	{ 864, 912, 4, 8, qtrue }, // targetdeath
+	{ 868, 920, 4, 8, qtrue }, // targetname
+	{ 872, 928, 4, 8, qtrue }, // team
+	{ 876, 936, 4, 8, qfalse }, // targetShaderName
+	{ 880, 944, 4, 8, qfalse }, // targetShaderNewName
+	{ 884, 952, 4, 8, qtrue }, // target_ent
+	{ 944, 1016, 4, 8, qtrue }, // think
+	{ 948, 1024, 4, 8, qtrue }, // reached
+	{ 952, 1032, 4, 8, qtrue }, // blocked
+	{ 956, 1040, 4, 8, qtrue }, // touch
+	{ 960, 1048, 4, 8, qtrue }, // use
+	{ 964, 1056, 4, 8, qtrue }, // pain
+	{ 968, 1064, 4, 8, qtrue }, // die
+	{ 1016, 1120, 4, 8, qtrue }, // chain
+	{ 1020, 1128, 4, 8, qtrue }, // enemy
+	{ 1024, 1136, 4, 8, qtrue }, // activator
+	{ 1028, 1144, 4, 8, qtrue }, // teamchain
+	{ 1032, 1152, 4, 8, qtrue }, // teammaster
+	{ 1096, 1224, 4, 8, qtrue }, // item
+	{ 1100, 1232, 4, 8, qtrue }, // aiAttributes
+	{ 1104, 1240, 4, 8, qtrue }, // aiName
+	{ 1112, 1256, 4, 8, qtrue }, // AIScript_AlertEntity
+	{ 1124, 1272, 4, 8, qtrue }, // aiSkin
+	{ 1128, 1280, 4, 8, qtrue }, // aihSkin
+	{ 1144, 1304, 4, 8, qtrue }, // dl_stylestring
+	{ 1148, 1312, 4, 8, qtrue }, // dl_shader
+	{ 1220, 1392, 4, 8, qtrue }, // melee
+	{ 1224, 1400, 4, 8, qtrue }, // spawnitem
+	{ 1260, 1440, 4, 8, qtrue }, // track
+	{ 1264, 1448, 4, 8, qtrue }, // scriptName
+	{ 1272, 1464, 4, 8, qfalse }, // scriptEvents
+	{ 1296, 1496, 4, 8, qtrue }, // scriptStatus.animatingParams
+	{ 1320, 1528, 4, 8, qfalse }, // scriptStatusBackup.animatingParams
+	{ 1364, 1576, 4, 8, qtrue }, // tagName
+	{ 1368, 1584, 4, 8, qtrue }, // tagParent
+	{ 1396, 1624, 4, 8, qfalse }, // scriptStatusCurrent.animatingParams
+};
+
+static const legacyPointerField_t legacy32ClientPointers[] = {
+	{ 1832, 1832, 4, 8, qtrue }, // hook
+	{ 1852, 1856, 4, 8, qfalse }, // modelInfo
+	{ 1856, 1864, 4, 8, qfalse }, // persistantPowerup
+	{ 2004, 2016, 4, 8, qfalse }, // cameraPortal
+};
+
+static const legacyPointerField_t legacy32ClientOldWeaponsPointers[] = {
+	{ 1832, 1832, 4, 8, qtrue }, // hook
+	{ 1852, 1856, 4, 8, qfalse }, // modelInfo
+	{ 1856, 1864, 4, 8, qfalse }, // persistantPowerup
+	{ 1992, 2012, 0, 0, qfalse }, // insert two missing ammoTimes slots before invulnerabilityTime
+	{ 1996, 2016, 4, 8, qfalse }, // cameraPortal
+};
+
+static const legacyPointerField_t legacy32CastStatePointers[] = {
+	{ 0, 0, 4, 8, qfalse }, // bs
+	{ 144, 152, 4, 8, qfalse }, // castScriptEvents
+	{ 468, 480, 4, 8, qfalse }, // weaponInfo
+	{ 14552, 14568, 4, 8, qtrue }, // aifunc
+	{ 14556, 14576, 4, 8, qtrue }, // oldAifunc
+	{ 14560, 14584, 4, 8, qtrue }, // aifuncAttack1
+	{ 14564, 14592, 4, 8, qtrue }, // aifuncAttack2
+	{ 14568, 14600, 4, 8, qtrue }, // aifuncAttack3
+	{ 14572, 14608, 4, 8, qtrue }, // painfunc
+	{ 14576, 14616, 4, 8, qtrue }, // deathfunc
+	{ 14580, 14624, 4, 8, qtrue }, // sightfunc
+	{ 14584, 14632, 4, 8, qtrue }, // sightEnemy
+	{ 14588, 14640, 4, 8, qtrue }, // sightFriend
+	{ 14592, 14648, 4, 8, qtrue }, // activate
+};
+
+static byte legacy32Buf[ LEGACY32_CAST_STATE_SIZE ];
+static qboolean loadingLegacy32Save;
+
+static qboolean G_IsLegacy32StructSize( const char *name, int savedSize, int expectedSize, int legacySize ) {
+	if ( savedSize == expectedSize ) {
+		G_Printf( "SAVELOAD %s size=%i native\n", name, savedSize );
+		return qfalse;
+	}
+	if ( savedSize == legacySize ) {
+		G_Printf( "SAVELOAD %s size=%i legacy32 -> %i\n", name, savedSize, expectedSize );
+		loadingLegacy32Save = qtrue;
+		return qtrue;
+	}
+	G_Printf( "SAVELOAD %s incompatible size=%i expected=%i legacy32=%i\n", name, savedSize, expectedSize, legacySize );
+	G_Error( "G_LoadGame: incompatible %s size in savegame (%i, expected %i or legacy 32-bit %i).\n",
+			 name, savedSize, expectedSize, legacySize );
+	return qfalse;
+}
+
+static qboolean G_IsLegacy32ClientStructSize( int savedSize, int expectedSize, const legacyPointerField_t **fields, int *numFields ) {
+	*fields = legacy32ClientPointers;
+	*numFields = sizeof( legacy32ClientPointers ) / sizeof( legacy32ClientPointers[0] );
+
+	if ( savedSize == expectedSize ) {
+		G_Printf( "SAVELOAD gclient_t size=%i native\n", savedSize );
+		return qfalse;
+	}
+	if ( savedSize == LEGACY32_GCLIENT_SIZE ) {
+		G_Printf( "SAVELOAD gclient_t size=%i legacy32 -> %i\n", savedSize, expectedSize );
+		loadingLegacy32Save = qtrue;
+		return qtrue;
+	}
+	if ( savedSize == LEGACY32_GCLIENT_SIZE_OLD_WEAPONS ) {
+		G_Printf( "SAVELOAD gclient_t size=%i legacy32-old-weapons -> %i\n", savedSize, expectedSize );
+		*fields = legacy32ClientOldWeaponsPointers;
+		*numFields = sizeof( legacy32ClientOldWeaponsPointers ) / sizeof( legacy32ClientOldWeaponsPointers[0] );
+		loadingLegacy32Save = qtrue;
+		return qtrue;
+	}
+
+	G_Printf( "SAVELOAD gclient_t incompatible size=%i expected=%i legacy32=%i legacy32-old-weapons=%i\n",
+			  savedSize, expectedSize, LEGACY32_GCLIENT_SIZE, LEGACY32_GCLIENT_SIZE_OLD_WEAPONS );
+	G_Error( "G_LoadGame: incompatible gclient_t size in savegame (%i, expected %i or legacy 32 bit %i/%i)\n",
+			 savedSize, expectedSize, LEGACY32_GCLIENT_SIZE, LEGACY32_GCLIENT_SIZE_OLD_WEAPONS );
+	return qfalse;
+}
+
+static void G_ExpandLegacy32Struct( byte *dst, int dstSize, const byte *src, int srcSize,
+									const legacyPointerField_t *fields, int numFields ) {
+	int i;
+	int oldCursor = 0;
+	int newCursor = 0;
+
+	memset( dst, 0, dstSize );
+
+	for ( i = 0; i < numFields; i++ ) {
+		const legacyPointerField_t *field = &fields[i];
+		int len = field->oldOfs - oldCursor;
+
+		if ( len < 0 || field->oldOfs + field->oldSize > srcSize || field->newOfs + field->newSize > dstSize ) {
+			G_Error( "G_LoadGame: invalid legacy 32-bit savegame pointer table" );
+		}
+
+		if ( len > 0 ) {
+			if ( newCursor + len > dstSize ) {
+				G_Error( "G_LoadGame: legacy 32-bit savegame expansion overflow" );
+			}
+			memcpy( dst + newCursor, src + oldCursor, len );
+		}
+
+		if ( field->restore ) {
+			memcpy( dst + field->newOfs, src + field->oldOfs, field->oldSize );
+		}
+
+		oldCursor = field->oldOfs + field->oldSize;
+		newCursor = field->newOfs + field->newSize;
+	}
+
+	if ( oldCursor < srcSize ) {
+		int len = srcSize - oldCursor;
+		if ( newCursor + len > dstSize ) {
+			len = dstSize - newCursor;
+		}
+		if ( len > 0 ) {
+			memcpy( dst + newCursor, src + oldCursor, len );
+		}
+	}
+}
+
+byte clientBuf[ 2 * sizeof( gclient_t ) ];
 
 /*
 ===============
@@ -633,18 +815,36 @@ void ReadClient( fileHandle_t f, gclient_t *client, int size ) {
 	gclient_t temp;
 	gentity_t   *ent;
 	int decodedSize;
+	qboolean legacy32;
+	const legacyPointerField_t *legacyClientFields;
+	int numLegacyClientFields;
+
+	legacy32 = G_IsLegacy32ClientStructSize( size, sizeof( temp ), &legacyClientFields, &numLegacyClientFields );
 
 	if ( ver == 10 ) {
-		trap_FS_Read( &temp, size, f );
+		if ( legacy32 ) {
+			trap_FS_Read( legacy32Buf, size, f );
+			G_ExpandLegacy32Struct( (byte *)&temp, sizeof( temp ), legacy32Buf, size,
+									legacyClientFields, numLegacyClientFields );
+		} else {
+			trap_FS_Read( &temp, size, f );
+		}
 	} else {
 		// read the encoded chunk
 		trap_FS_Read( &decodedSize, sizeof( int ), f );
+		G_Printf( "SAVELOAD ReadClient decodedChunk=%i legacy32=%i\n", decodedSize, legacy32 );
 		if ( decodedSize > sizeof( clientBuf ) ) {
 			G_Error( "G_LoadGame: encoded chunk is greater than buffer" );
 		}
 		trap_FS_Read( clientBuf, decodedSize, f ); \
 		// decode it
-		G_Save_Decode( clientBuf, decodedSize, (byte *)&temp, sizeof( temp ) );
+		if ( legacy32 ) {
+			G_Save_Decode( clientBuf, decodedSize, legacy32Buf, size );
+			G_ExpandLegacy32Struct( (byte *)&temp, sizeof( temp ), legacy32Buf, size,
+									legacyClientFields, numLegacyClientFields );
+		} else {
+			G_Save_Decode( clientBuf, decodedSize, (byte *)&temp, sizeof( temp ) );
+		}
 	}
 
 	// convert any feilds back to the correct data
@@ -791,20 +991,36 @@ void ReadEntity( fileHandle_t f, gentity_t *ent, int size ) {
 	gentity_t temp, backup, backup2;
 	vmCvar_t cvar;
 	int decodedSize;
+	qboolean legacy32;
 
 	backup = *ent;
 
+	legacy32 = G_IsLegacy32StructSize( "gentity_t", size, sizeof( temp ), LEGACY32_GENTITY_SIZE );
+
 	if ( ver == 10 ) {
-		trap_FS_Read( &temp, size, f );
+		if ( legacy32 ) {
+			trap_FS_Read( legacy32Buf, size, f );
+			G_ExpandLegacy32Struct( (byte *)&temp, sizeof( temp ), legacy32Buf, size,
+									legacy32EntityPointers, sizeof( legacy32EntityPointers ) / sizeof( legacy32EntityPointers[0] ) );
+		} else {
+			trap_FS_Read( &temp, size, f );
+		}
 	} else {
 		// read the encoded chunk
 		trap_FS_Read( &decodedSize, sizeof( int ), f );
+		G_Printf( "SAVELOAD ReadEntity ent=%i decodedChunk=%i legacy32=%i\n", ent ? ent->s.number : -1, decodedSize, legacy32 );
 		if ( decodedSize > sizeof( entityBuf ) ) {
 			G_Error( "G_LoadGame: encoded chunk is greater than buffer" );
 		}
 		trap_FS_Read( entityBuf, decodedSize, f );
 		// decode it
-		G_Save_Decode( entityBuf, decodedSize, (byte *)&temp, sizeof( temp ) );
+		if ( legacy32 ) {
+			G_Save_Decode( entityBuf, decodedSize, legacy32Buf, size );
+			G_ExpandLegacy32Struct( (byte *)&temp, sizeof( temp ), legacy32Buf, size,
+									legacy32EntityPointers, sizeof( legacy32EntityPointers ) / sizeof( legacy32EntityPointers[0] ) );
+		} else {
+			G_Save_Decode( entityBuf, decodedSize, (byte *)&temp, sizeof( temp ) );
+		}
 	}
 
 	// convert any fields back to the correct data
@@ -955,18 +1171,34 @@ void ReadCastState( fileHandle_t f, cast_state_t *cs, int size ) {
 	ignoreField_t *ifield;
 	cast_state_t temp;
 	int decodedSize;
+	qboolean legacy32;
+
+	legacy32 = G_IsLegacy32StructSize( "cast_state_t", size, sizeof( temp ), LEGACY32_CAST_STATE_SIZE );
 
 	if ( ver == 10 ) {
-		trap_FS_Read( &temp, size, f );
+		if ( legacy32 ) {
+			trap_FS_Read( legacy32Buf, size, f );
+			G_ExpandLegacy32Struct( (byte *)&temp, sizeof( temp ), legacy32Buf, size,
+									legacy32CastStatePointers, sizeof( legacy32CastStatePointers ) / sizeof( legacy32CastStatePointers[0] ) );
+		} else {
+			trap_FS_Read( &temp, size, f );
+		}
 	} else {
 		// read the encoded chunk
 		trap_FS_Read( &decodedSize, sizeof( int ), f );
+		G_Printf( "SAVELOAD ReadCastState entityNum=%i decodedChunk=%i legacy32=%i\n", cs ? cs->entityNum : -1, decodedSize, legacy32 );
 		if ( decodedSize > sizeof( castStateBuf ) ) {
 			G_Error( "G_LoadGame: encoded chunk is greater than buffer" );
 		}
 		trap_FS_Read( castStateBuf, decodedSize, f ); \
 		// decode it
-		G_Save_Decode( castStateBuf, decodedSize, (byte *)&temp, sizeof( temp ) );
+		if ( legacy32 ) {
+			G_Save_Decode( castStateBuf, decodedSize, legacy32Buf, size );
+			G_ExpandLegacy32Struct( (byte *)&temp, sizeof( temp ), legacy32Buf, size,
+									legacy32CastStatePointers, sizeof( legacy32CastStatePointers ) / sizeof( legacy32CastStatePointers[0] ) );
+		} else {
+			G_Save_Decode( castStateBuf, decodedSize, (byte *)&temp, sizeof( temp ) );
+		}
 	}
 
 	// convert any feilds back to the correct data
@@ -1400,25 +1632,31 @@ void G_LoadGame( char *filename ) {
 	qboolean serverEntityUpdate = qfalse;
 
 	if ( g_gametype.integer != GT_SINGLE_PLAYER ) {    // don't allow loads in MP
+		G_Printf( "SAVELOAD G_LoadGame rejected: gametype=%i\n", g_gametype.integer );
 		return;
 	}
 
 	if ( saveGamePending ) {
+		G_Printf( "SAVELOAD G_LoadGame rejected: saveGamePending still set\n" );
 		return;
 	}
 
-	G_DPrintf( "G_LoadGame '%s'\n", filename );
+	G_Printf( "SAVELOAD G_LoadGame start arg='%s'\n", filename ? filename : "<null>" );
 
 	// enforce the "current" savegame, since that is used for all loads
 	filename = "save\\current.svg";
+	loadingLegacy32Save = qfalse;
 
 	// open the file
 	if ( trap_FS_FOpenFile( filename, &f, FS_READ ) < 0 ) {
+		G_Printf( "SAVELOAD G_LoadGame failed: cannot open '%s'\n", filename );
 		G_Error( "G_LoadGame: savegame '%s' not found\n", filename );
 	}
+	G_Printf( "SAVELOAD G_LoadGame opened '%s'\n", filename );
 
 	// read the version
 	trap_FS_Read( &i, sizeof( i ), f );
+	G_Printf( "SAVELOAD G_LoadGame version=%i currentVersion=%i\n", i, SAVE_VERSION );
 	// TTimo
 	// show_bug.cgi?id=434
 	// 17 is the only version actually out in the wild
@@ -1436,10 +1674,12 @@ void G_LoadGame( char *filename ) {
 
 	// read the mapname (this is only used in the sever exe, so just discard it)
 	trap_FS_Read( mapname, MAX_QPATH, f );
+	G_Printf( "SAVELOAD G_LoadGame map='%s'\n", mapname );
 
 	// read the level time
 	trap_FS_Read( &i, sizeof( i ), f );
 	leveltime = i;
+	G_Printf( "SAVELOAD G_LoadGame leveltime=%i\n", leveltime );
 
 	// read the totalPlayTime
 	trap_FS_Read( &i, sizeof( i ), f );
@@ -1537,6 +1777,7 @@ void G_LoadGame( char *filename ) {
 	// read the entity structures
 	trap_FS_Read( &i, sizeof( i ), f );
 	size = i;
+	G_Printf( "SAVELOAD G_LoadGame entity struct size=%i native=%i legacy32=%i\n", size, (int)sizeof( gentity_t ), LEGACY32_GENTITY_SIZE );
 	last = 0;
 	while ( 1 )
 	{
@@ -1578,6 +1819,8 @@ void G_LoadGame( char *filename ) {
 	// read the client structures
 	trap_FS_Read( &i, sizeof( i ), f );
 	size = i;
+	G_Printf( "SAVELOAD G_LoadGame client struct size=%i native=%i legacy32=%i legacy32-old-weapons=%i\n",
+			  size, (int)sizeof( gclient_t ), LEGACY32_GCLIENT_SIZE, LEGACY32_GCLIENT_SIZE_OLD_WEAPONS );
 	while ( 1 )
 	{
 		trap_FS_Read( &i, sizeof( i ), f );
@@ -1599,6 +1842,7 @@ void G_LoadGame( char *filename ) {
 	// read the cast_state structures
 	trap_FS_Read( &i, sizeof( i ), f );
 	size = i;
+	G_Printf( "SAVELOAD G_LoadGame cast_state struct size=%i native=%i legacy32=%i\n", size, (int)sizeof( cast_state_t ), LEGACY32_CAST_STATE_SIZE );
 	while ( 1 )
 	{
 		trap_FS_Read( &i, sizeof( i ), f );
@@ -1654,6 +1898,7 @@ void G_LoadGame( char *filename ) {
 
 
 	trap_FS_FCloseFile( f );
+	G_Printf( "SAVELOAD G_LoadGame file restore complete legacy32=%i serverEntityUpdate=%i\n", loadingLegacy32Save, serverEntityUpdate );
 
 	// now increment the attempts field and update totalplaytime according to cvar
 	trap_Cvar_Update( &g_attempts );
@@ -1665,6 +1910,12 @@ void G_LoadGame( char *filename ) {
 	}
 
 	level.lastLoadTime = leveltime;
+
+	if ( loadingLegacy32Save ) {
+		G_Printf( "Loaded legacy 32-bit savegame; upgrading current savegame to 64-bit format.\n" );
+		G_SaveGame( NULL );
+	}
+	G_Printf( "SAVELOAD G_LoadGame complete\n" );
 
 /*
 	// always save to the "current" savegame
