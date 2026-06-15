@@ -53,7 +53,8 @@ static XrAction gripAction;          /* grip pose  */
 static XrAction aimAction;           /* aim pose   */
 static XrAction vibrateAction;       /* haptics    */
 
-static XrAction triggerAction;       /* trigger float (both hands)     */
+static XrAction triggerAction;       /* trigger float (Touch/Index/etc.)  */
+static XrAction triggerClickAction;  /* trigger click (Pico)              */
 static XrAction triggerTouchAction;
 static XrAction squeezeAction;       /* grip/squeeze float (both)      */
 static XrAction squeezeClickAction;  /* grip click (Vive/simple)       */
@@ -185,6 +186,7 @@ void TBXR_InitActions( void )
     CreateAction(actionSet, XR_ACTION_TYPE_VIBRATION_OUTPUT, "vibrate_hand",    "Vibrate Hand",   SIDE_COUNT, handSubactionPath, &vibrateAction);
 
     CreateAction(actionSet, XR_ACTION_TYPE_FLOAT_INPUT,      "trigger",         "Trigger",        SIDE_COUNT, handSubactionPath, &triggerAction);
+    CreateAction(actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT,    "triggerclick",    "Trigger Click",  SIDE_COUNT, handSubactionPath, &triggerClickAction);
     CreateAction(actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT,    "triggertouch",    "Trigger Touch",  SIDE_COUNT, handSubactionPath, &triggerTouchAction);
     CreateAction(actionSet, XR_ACTION_TYPE_FLOAT_INPUT,      "gripvalue",       "Grip Value",     SIDE_COUNT, handSubactionPath, &squeezeAction);
     CreateAction(actionSet, XR_ACTION_TYPE_BOOLEAN_INPUT,    "squeezed",        "Gripped",        SIDE_COUNT, handSubactionPath, &squeezeClickAction);
@@ -204,12 +206,14 @@ void TBXR_InitActions( void )
     XrPath aimPath[SIDE_COUNT];
     XrPath hapticPath[SIDE_COUNT];
     XrPath menuClickPath[SIDE_COUNT];
+    XrPath backClickPath[SIDE_COUNT];
     XrPath selectClickPath[SIDE_COUNT];
 
     XrPath squeezeValuePath[SIDE_COUNT];
     XrPath squeezeClickPath[SIDE_COUNT];
 
     XrPath triggerValuePath[SIDE_COUNT];
+    XrPath triggerClickPath[SIDE_COUNT];
     XrPath triggerTouchPath[SIDE_COUNT];
 
     XrPath thumbstickPosPath[SIDE_COUNT];
@@ -229,6 +233,8 @@ void TBXR_InitActions( void )
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/right/output/haptic",   &hapticPath[SIDE_RIGHT]));
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/left/input/menu/click",   &menuClickPath[SIDE_LEFT]));
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/right/input/menu/click",  &menuClickPath[SIDE_RIGHT]));
+    CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/left/input/back/click",   &backClickPath[SIDE_LEFT]));
+    CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/right/input/back/click",  &backClickPath[SIDE_RIGHT]));
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/left/input/select/click",  &selectClickPath[SIDE_LEFT]));
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/right/input/select/click", &selectClickPath[SIDE_RIGHT]));
 
@@ -239,6 +245,8 @@ void TBXR_InitActions( void )
 
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/left/input/trigger/value",  &triggerValuePath[SIDE_LEFT]));
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/right/input/trigger/value", &triggerValuePath[SIDE_RIGHT]));
+    CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/left/input/trigger/click",  &triggerClickPath[SIDE_LEFT]));
+    CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/right/input/trigger/click", &triggerClickPath[SIDE_RIGHT]));
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/left/input/trigger/touch",  &triggerTouchPath[SIDE_LEFT]));
     CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/user/hand/right/input/trigger/touch", &triggerTouchPath[SIDE_RIGHT]));
 
@@ -368,10 +376,10 @@ void TBXR_InitActions( void )
         result = xrSuggestInteractionProfileBindings(gAppState.Instance, &sb);
     }
 
-    // ---- ByteDance Pico 4 ----
+    // ---- Pico / ByteDance controller profile ----
     {
         XrPath profile;
-        CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/interaction_profiles/bytedance/pico4_controller", &profile));
+        CHECK_XRCMD(xrStringToPath(gAppState.Instance, "/interaction_profiles/pico/neo3_controller", &profile));
 
         XrActionSuggestedBinding bindings[64];
         int n = 0;
@@ -379,9 +387,16 @@ void TBXR_InitActions( void )
         bindings[n++] = ActionSuggestedBinding(YAction, YClickPath[SIDE_LEFT]);
         bindings[n++] = ActionSuggestedBinding(AAction, AClickPath[SIDE_RIGHT]);
         bindings[n++] = ActionSuggestedBinding(BAction, BClickPath[SIDE_RIGHT]);
-        bindings[n++] = ActionSuggestedBinding(backAction, menuClickPath[SIDE_LEFT]);
-        bindings[n++] = ActionSuggestedBinding(triggerAction, triggerValuePath[SIDE_LEFT]);
-        bindings[n++] = ActionSuggestedBinding(triggerAction, triggerValuePath[SIDE_RIGHT]);
+
+        // Pico uses back/click, not menu/click.
+        bindings[n++] = ActionSuggestedBinding(backAction, backClickPath[SIDE_LEFT]);
+        bindings[n++] = ActionSuggestedBinding(backAction, backClickPath[SIDE_RIGHT]);
+
+        // Pico exposes the trigger as click in this profile. Do not bind the
+        // float trigger action to trigger/value here; it will not fire on Pico.
+        bindings[n++] = ActionSuggestedBinding(triggerClickAction, triggerClickPath[SIDE_LEFT]);
+        bindings[n++] = ActionSuggestedBinding(triggerClickAction, triggerClickPath[SIDE_RIGHT]);
+
         bindings[n++] = ActionSuggestedBinding(squeezeAction, squeezeValuePath[SIDE_LEFT]);
         bindings[n++] = ActionSuggestedBinding(squeezeAction, squeezeValuePath[SIDE_RIGHT]);
         bindings[n++] = ActionSuggestedBinding(squeezeClickAction, squeezeClickPath[SIDE_LEFT]);
@@ -390,8 +405,9 @@ void TBXR_InitActions( void )
         bindings[n++] = ActionSuggestedBinding(thumbstickAction, thumbstickPosPath[SIDE_RIGHT]);
         bindings[n++] = ActionSuggestedBinding(thumbstickClickAction, thumbstickClickPath[SIDE_LEFT]);
         bindings[n++] = ActionSuggestedBinding(thumbstickClickAction, thumbstickClickPath[SIDE_RIGHT]);
-        bindings[n++] = ActionSuggestedBinding(thumbstickTouchAction, thumbstickTouchPath[SIDE_LEFT]);
-        bindings[n++] = ActionSuggestedBinding(thumbstickTouchAction, thumbstickTouchPath[SIDE_RIGHT]);
+
+        // Pico does not reliably expose thumbstick/touch; leave it unbound.
+
         bindings[n++] = ActionSuggestedBinding(aimAction, aimPath[SIDE_LEFT]);
         bindings[n++] = ActionSuggestedBinding(aimAction, aimPath[SIDE_RIGHT]);
         bindings[n++] = ActionSuggestedBinding(gripAction, posePath[SIDE_LEFT]);
@@ -505,7 +521,9 @@ static void TBXR_CheckControllers(void)
                     gAppState.controllersPresent = VIVE_CONTROLLERS;
                 else if (strcmp(pathString, "/interaction_profiles/oculus/touch_controller") == 0)
                     gAppState.controllersPresent = TOUCH_CONTROLLERS;
-                else if (strcmp(pathString, "/interaction_profiles/bytedance/pico4_controller") == 0 ||
+                else if (strcmp(pathString, "/interaction_profiles/pico/neo3_controller") == 0 ||
+                         strcmp(pathString, "/interaction_profiles/bytedance/pico4_controller") == 0 ||
+                         strcmp(pathString, "/interaction_profiles/bytedance/pico_neo3_controller") == 0 ||
                          strcmp(pathString, "/interaction_profiles/bytedance/pico_neo3_controller_bd") == 0)
                     gAppState.controllersPresent = PICO_CONTROLLERS;
                 else
@@ -580,6 +598,9 @@ void TBXR_UpdateControllers( )
         leftTrackedRemoteState_new.Buttons |= xrButton_GripTrigger;
 
     leftTrackedRemoteState_new.IndexTrigger = GetActionStateFloat(triggerAction, SIDE_LEFT).currentState;
+    if (GetActionStateBoolean(triggerClickAction, SIDE_LEFT).currentState) {
+        leftTrackedRemoteState_new.IndexTrigger = 1.0f;
+    }
     if (leftTrackedRemoteState_new.IndexTrigger > 0.5f)
         leftTrackedRemoteState_new.Buttons |= xrButton_Trigger;
 
@@ -598,15 +619,37 @@ void TBXR_UpdateControllers( )
         rightTrackedRemoteState_new.Buttons |= xrButton_GripTrigger;
 
     rightTrackedRemoteState_new.IndexTrigger = GetActionStateFloat(triggerAction, SIDE_RIGHT).currentState;
+    if (GetActionStateBoolean(triggerClickAction, SIDE_RIGHT).currentState) {
+        rightTrackedRemoteState_new.IndexTrigger = 1.0f;
+    }
     if (rightTrackedRemoteState_new.IndexTrigger > 0.5f)
         rightTrackedRemoteState_new.Buttons |= xrButton_Trigger;
 
     // ---- Thumbsticks ----
     XrActionStateVector2f js;
     js = GetActionStateVector2(thumbstickAction, SIDE_LEFT);
-    leftTrackedRemoteState_new.Joystick.x = js.currentState.x;
-    leftTrackedRemoteState_new.Joystick.y = js.currentState.y;
+    {
+        float joyX = js.currentState.x;
+        float joyY = js.currentState.y;
+        float joyLen = sqrtf((joyX * joyX) + (joyY * joyY));
+        if (joyLen > 1.0f) {
+            joyX /= joyLen;
+            joyY /= joyLen;
+        }
+        leftTrackedRemoteState_new.Joystick.x = joyX;
+        leftTrackedRemoteState_new.Joystick.y = joyY;
+    }
+
     js = GetActionStateVector2(thumbstickAction, SIDE_RIGHT);
-    rightTrackedRemoteState_new.Joystick.x = js.currentState.x;
-    rightTrackedRemoteState_new.Joystick.y = js.currentState.y;
+    {
+        float joyX = js.currentState.x;
+        float joyY = js.currentState.y;
+        float joyLen = sqrtf((joyX * joyX) + (joyY * joyY));
+        if (joyLen > 1.0f) {
+            joyX /= joyLen;
+            joyY /= joyLen;
+        }
+        rightTrackedRemoteState_new.Joystick.x = joyX;
+        rightTrackedRemoteState_new.Joystick.y = joyY;
+    }
 }
