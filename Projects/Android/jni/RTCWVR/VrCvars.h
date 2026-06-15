@@ -6,6 +6,7 @@ extern cvar_t	*vr_walkdirection;
 extern cvar_t	*vr_movement_multiplier;
 extern cvar_t	*vr_weapon_pitchadjust;
 extern cvar_t	*vr_lasersight;
+extern cvar_t	*vr_laserdot;
 extern cvar_t	*vr_control_scheme;
 extern cvar_t	*vr_teleport;
 extern cvar_t	*vr_virtual_stock;

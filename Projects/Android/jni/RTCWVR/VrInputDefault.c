@@ -15,6 +15,8 @@ Authors		:	Simon Brown
 #include <src/qcommon/qcommon.h>
 #include <src/client/client.h>
 
+cvar_t *vr_laserdot;
+
 void SV_Trace( trace_t *results, const vec3_t start, const vec3_t mins, const vec3_t maxs, const vec3_t end, int passEntityNum, int contentmask, int capsule );
 
 void RTCWVR_HapticEvent(const char* event, int position, int flags, int intensity, float angle, float yHeight );
@@ -86,6 +88,27 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
         primaryButton2 = domButton2;
         secondaryButton1 = offButton1;
         secondaryButton2 = offButton2;
+    }
+
+    static qboolean laserDotTogglePressed = qfalse;
+
+    qboolean buttoncombo =
+            (primaryButtonsNew & ovrButton_Joystick) &&
+            (primaryButtonsNew & ovrButton_GripTrigger);
+
+    if (buttoncombo && !laserDotTogglePressed)
+    {
+        Cvar_SetValue("vr_laserdot",
+                      vr_laserdot->value > 0 ? 0 : 1);
+
+        laserDotTogglePressed = qtrue;
+
+        RTCWVR_Vibrate(80, 0, 0.8f);
+        RTCWVR_Vibrate(80, 1, 0.8f);
+    }
+    else if (!buttoncombo)
+    {
+        laserDotTogglePressed = qfalse;
     }
 
     {

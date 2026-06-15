@@ -158,7 +158,7 @@ static void RTCWVR_InitCvars(void)
 	vr_movement_multiplier = Cvar_Get("vr_movement_multiplier", "1.0", CVAR_ARCHIVE);
 	vr_weapon_pitchadjust = Cvar_Get("vr_weapon_pitchadjust", "0", CVAR_ARCHIVE);
 	vr_lasersight = Cvar_Get("vr_lasersight", "0", CVAR_ARCHIVE);
-	Cvar_Set("vr_lasersight", "0");
+	vr_laserdot = Cvar_Get("vr_laserdot", "0", CVAR_ARCHIVE);
 	vr_control_scheme = Cvar_Get("vr_control_scheme", "0", CVAR_ARCHIVE);
 	vr_teleport = Cvar_Get("vr_teleport", "0", CVAR_ARCHIVE);
 	vr_virtual_stock = Cvar_Get("vr_virtual_stock", "1", CVAR_ARCHIVE);
