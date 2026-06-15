@@ -103,8 +103,11 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
 
         laserDotTogglePressed = qtrue;
 
-        RTCWVR_Vibrate(80, 0, 0.8f);
-        RTCWVR_Vibrate(80, 1, 0.8f);
+        if (vr_control_scheme->value < 10) {
+            RTCWVR_Vibrate(80, 1, 0.8f);
+        } else {
+            RTCWVR_Vibrate(80, 0, 0.8f);
+        }
     }
     else if (!buttoncombo)
     {
