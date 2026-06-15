@@ -324,6 +324,11 @@ void VR_SetHMDOrientation(float pitch, float yaw, float roll)
 	VectorSubtract(vr.hmdorientation_last, vr.hmdorientation, vr.hmdorientation_delta);
 	VectorCopy(vr.hmdorientation, vr.hmdorientation_last);
 
+	if (!vr.scopeengaged && !vr.screen && !vr.cin_camera) {
+		VectorCopy(vr.hmdorientation, vr.hmdorientation_first);
+		VectorCopy(vr.weaponangles, vr.weaponangles_first);
+	}
+
 	float clientview_yaw = vr.clientviewangles[YAW] - vr.hmdorientation[YAW];
 	vr.clientview_yaw_delta = vr.clientview_yaw_last - clientview_yaw;
 	vr.clientview_yaw_last = clientview_yaw;
@@ -529,29 +534,31 @@ void RTCWVR_ResyncClientYawWithGameYaw(void)
 void RTCWVR_GetMove(float *forward, float *side, float *pos_forward, float *pos_side, float *up,
 					float *yaw, float *pitch, float *roll)
 {
+	qboolean weaponScopeView = vr.scopeengaged && vr.backpackitemactive != 3 && !vr.binocularsActive;
+
 	if (forward) {
-		*forward = remote_movementForward;
+		*forward = weaponScopeView ? remote_movementForward / 3.0f : remote_movementForward;
 	}
 	if (side) {
-		*side = remote_movementSideways;
+		*side = weaponScopeView ? remote_movementSideways / 3.0f : remote_movementSideways;
 	}
 	if (pos_forward) {
-		*pos_forward = positional_movementForward;
+		*pos_forward = weaponScopeView ? 0.0f : positional_movementForward;
 	}
 	if (pos_side) {
-		*pos_side = positional_movementSideways;
+		*pos_side = weaponScopeView ? 0.0f : positional_movementSideways;
 	}
 	if (up) {
 		*up = remote_movementUp;
 	}
 	if (yaw) {
-		*yaw = snapTurn;
+		*yaw = weaponScopeView ? vr.scopedviewangles[YAW] : snapTurn;
 	}
 	if (pitch) {
-		*pitch = 0.0f;
+		*pitch = weaponScopeView ? vr.scopedviewangles[PITCH] : vr.hmdorientation[PITCH];
 	}
 	if (roll) {
-		*roll = 0.0f;
+		*roll = weaponScopeView ? vr.scopedviewangles[ROLL] : vr.hmdorientation[ROLL];
 	}
 }
 

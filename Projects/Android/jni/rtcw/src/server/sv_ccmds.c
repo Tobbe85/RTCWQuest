@@ -457,19 +457,13 @@ void    SV_LoadGame_f( void ) {
 	byte *buffer;
 	int size;
 
-	Com_Printf( "SAVELOAD SV_LoadGame_f argc=%i arg1='%s' loading=%i reloading=%i sv_running=%i map='%s'\n",
-				 Cmd_Argc(), Cmd_Argv( 1 ), Cvar_VariableIntegerValue( "savegame_loading" ),
-				 sv_reloading->integer, com_sv_running->integer, sv_mapname ? sv_mapname->string : "" );
-
 	// dont allow command if another loadgame is pending
 	if ( Cvar_VariableIntegerValue( "savegame_loading" ) ) {
-		Com_Printf( "SAVELOAD SV_LoadGame_f rejected: savegame_loading already set\n" );
 		return;
 	}
 	if ( sv_reloading->integer ) {
 		// (SA) disabling
 //	if(sv_reloading->integer && sv_reloading->integer != RELOAD_FAILED )	// game is in 'reload' mode, don't allow starting new maps yet.
-		Com_Printf( "SAVELOAD SV_LoadGame_f rejected: sv_reloading=%i\n", sv_reloading->integer );
 		return;
 	}
 
@@ -493,17 +487,14 @@ void    SV_LoadGame_f( void ) {
 	size = FS_ReadFile( filename, NULL );
 	if ( size < 0 ) {
 		Com_Printf( "Can't find savegame %s\n", filename );
-		Com_Printf( "SAVELOAD SV_LoadGame_f failed: save file not found '%s'\n", filename );
 		return;
 	}
-	Com_Printf( "SAVELOAD SV_LoadGame_f found '%s' size=%i\n", filename, size );
 
 	//buffer = Hunk_AllocateTempMemory(size);
 	FS_ReadFile( filename, (void **)&buffer );
 
 	// read the mapname, if it is the same as the current map, then do a fast load
 	Com_sprintf( mapname, sizeof( mapname ), (const char*)( buffer + sizeof( int ) ) );
-	Com_Printf( "SAVELOAD SV_LoadGame_f save map='%s' current map='%s'\n", mapname, sv_mapname ? sv_mapname->string : "" );
 
 	if ( com_sv_running->integer && ( com_frameTime != sv.serverId ) ) {
 		// check mapname
@@ -512,7 +503,6 @@ void    SV_LoadGame_f( void ) {
 			if ( Q_stricmp( filename, "save/current.svg" ) != 0 ) {
 				// copy it to the current savegame file
 				FS_WriteFile( "save/current.svg", buffer, size );
-				Com_Printf( "SAVELOAD SV_LoadGame_f copied '%s' to save/current.svg\n", filename );
 			}
 
 			Hunk_FreeTempMemory( buffer );
@@ -521,10 +511,9 @@ void    SV_LoadGame_f( void ) {
 			// set the filename
 			Cvar_Set( "savegame_filename", filename );
 
-            Cmd_ClearArgc();
+			Cmd_ClearArgc();
 
 			// quick-restart the server
-			Com_Printf( "SAVELOAD SV_LoadGame_f fast path: calling SV_MapRestart_f\n" );
 			SV_MapRestart_f();  // savegame will be loaded after restart
 
 			return;
@@ -535,10 +524,8 @@ void    SV_LoadGame_f( void ) {
 
 	// otherwise, do a slow load
 	if ( Cvar_VariableIntegerValue( "sv_cheats" ) ) {
-		Com_Printf( "SAVELOAD SV_LoadGame_f slow path: spdevmap '%s'\n", filename );
 		Cbuf_ExecuteText( EXEC_APPEND, va( "spdevmap %s", filename ) );
 	} else {    // no cheats
-		Com_Printf( "SAVELOAD SV_LoadGame_f slow path: spmap '%s'\n", filename );
 		Cbuf_ExecuteText( EXEC_APPEND, va( "spmap %s", filename ) );
 	}
 }

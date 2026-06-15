@@ -38,11 +38,14 @@ typedef struct {
     vec3_t hmdorientation_last; // Don't use this, it is just for calculating delta!
     vec3_t hmdorientation_delta;
     vec3_t hmdorientation_snap;
+    vec3_t hmdorientation_first;
+    vec3_t scopedviewangles;
 
     vec3_t weaponangles_knife;
     vec3_t weaponangles;
     vec3_t weaponangles_last; // Don't use this, it is just for calculating delta!
     vec3_t weaponangles_delta;
+    vec3_t weaponangles_first;
     vec3_t dominanthandangles;
 
     float weapon_recoil;            // recoil effect to improve the default

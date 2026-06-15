@@ -674,15 +674,12 @@ static qboolean loadingLegacy32Save;
 
 static qboolean G_IsLegacy32StructSize( const char *name, int savedSize, int expectedSize, int legacySize ) {
 	if ( savedSize == expectedSize ) {
-		G_Printf( "SAVELOAD %s size=%i native\n", name, savedSize );
 		return qfalse;
 	}
 	if ( savedSize == legacySize ) {
-		G_Printf( "SAVELOAD %s size=%i legacy32 -> %i\n", name, savedSize, expectedSize );
 		loadingLegacy32Save = qtrue;
 		return qtrue;
 	}
-	G_Printf( "SAVELOAD %s incompatible size=%i expected=%i legacy32=%i\n", name, savedSize, expectedSize, legacySize );
 	G_Error( "G_LoadGame: incompatible %s size in savegame (%i, expected %i or legacy 32-bit %i).\n",
 			 name, savedSize, expectedSize, legacySize );
 	return qfalse;
@@ -693,24 +690,19 @@ static qboolean G_IsLegacy32ClientStructSize( int savedSize, int expectedSize, c
 	*numFields = sizeof( legacy32ClientPointers ) / sizeof( legacy32ClientPointers[0] );
 
 	if ( savedSize == expectedSize ) {
-		G_Printf( "SAVELOAD gclient_t size=%i native\n", savedSize );
 		return qfalse;
 	}
 	if ( savedSize == LEGACY32_GCLIENT_SIZE ) {
-		G_Printf( "SAVELOAD gclient_t size=%i legacy32 -> %i\n", savedSize, expectedSize );
 		loadingLegacy32Save = qtrue;
 		return qtrue;
 	}
 	if ( savedSize == LEGACY32_GCLIENT_SIZE_OLD_WEAPONS ) {
-		G_Printf( "SAVELOAD gclient_t size=%i legacy32-old-weapons -> %i\n", savedSize, expectedSize );
 		*fields = legacy32ClientOldWeaponsPointers;
 		*numFields = sizeof( legacy32ClientOldWeaponsPointers ) / sizeof( legacy32ClientOldWeaponsPointers[0] );
 		loadingLegacy32Save = qtrue;
 		return qtrue;
 	}
 
-	G_Printf( "SAVELOAD gclient_t incompatible size=%i expected=%i legacy32=%i legacy32-old-weapons=%i\n",
-			  savedSize, expectedSize, LEGACY32_GCLIENT_SIZE, LEGACY32_GCLIENT_SIZE_OLD_WEAPONS );
 	G_Error( "G_LoadGame: incompatible gclient_t size in savegame (%i, expected %i or legacy 32 bit %i/%i)\n",
 			 savedSize, expectedSize, LEGACY32_GCLIENT_SIZE, LEGACY32_GCLIENT_SIZE_OLD_WEAPONS );
 	return qfalse;
@@ -832,7 +824,6 @@ void ReadClient( fileHandle_t f, gclient_t *client, int size ) {
 	} else {
 		// read the encoded chunk
 		trap_FS_Read( &decodedSize, sizeof( int ), f );
-		G_Printf( "SAVELOAD ReadClient decodedChunk=%i legacy32=%i\n", decodedSize, legacy32 );
 		if ( decodedSize > sizeof( clientBuf ) ) {
 			G_Error( "G_LoadGame: encoded chunk is greater than buffer" );
 		}
@@ -1008,7 +999,6 @@ void ReadEntity( fileHandle_t f, gentity_t *ent, int size ) {
 	} else {
 		// read the encoded chunk
 		trap_FS_Read( &decodedSize, sizeof( int ), f );
-		G_Printf( "SAVELOAD ReadEntity ent=%i decodedChunk=%i legacy32=%i\n", ent ? ent->s.number : -1, decodedSize, legacy32 );
 		if ( decodedSize > sizeof( entityBuf ) ) {
 			G_Error( "G_LoadGame: encoded chunk is greater than buffer" );
 		}
@@ -1186,7 +1176,6 @@ void ReadCastState( fileHandle_t f, cast_state_t *cs, int size ) {
 	} else {
 		// read the encoded chunk
 		trap_FS_Read( &decodedSize, sizeof( int ), f );
-		G_Printf( "SAVELOAD ReadCastState entityNum=%i decodedChunk=%i legacy32=%i\n", cs ? cs->entityNum : -1, decodedSize, legacy32 );
 		if ( decodedSize > sizeof( castStateBuf ) ) {
 			G_Error( "G_LoadGame: encoded chunk is greater than buffer" );
 		}
@@ -1632,16 +1621,12 @@ void G_LoadGame( char *filename ) {
 	qboolean serverEntityUpdate = qfalse;
 
 	if ( g_gametype.integer != GT_SINGLE_PLAYER ) {    // don't allow loads in MP
-		G_Printf( "SAVELOAD G_LoadGame rejected: gametype=%i\n", g_gametype.integer );
 		return;
 	}
 
 	if ( saveGamePending ) {
-		G_Printf( "SAVELOAD G_LoadGame rejected: saveGamePending still set\n" );
 		return;
 	}
-
-	G_Printf( "SAVELOAD G_LoadGame start arg='%s'\n", filename ? filename : "<null>" );
 
 	// enforce the "current" savegame, since that is used for all loads
 	filename = "save\\current.svg";
@@ -1649,14 +1634,11 @@ void G_LoadGame( char *filename ) {
 
 	// open the file
 	if ( trap_FS_FOpenFile( filename, &f, FS_READ ) < 0 ) {
-		G_Printf( "SAVELOAD G_LoadGame failed: cannot open '%s'\n", filename );
 		G_Error( "G_LoadGame: savegame '%s' not found\n", filename );
 	}
-	G_Printf( "SAVELOAD G_LoadGame opened '%s'\n", filename );
 
 	// read the version
 	trap_FS_Read( &i, sizeof( i ), f );
-	G_Printf( "SAVELOAD G_LoadGame version=%i currentVersion=%i\n", i, SAVE_VERSION );
 	// TTimo
 	// show_bug.cgi?id=434
 	// 17 is the only version actually out in the wild
@@ -1674,12 +1656,10 @@ void G_LoadGame( char *filename ) {
 
 	// read the mapname (this is only used in the sever exe, so just discard it)
 	trap_FS_Read( mapname, MAX_QPATH, f );
-	G_Printf( "SAVELOAD G_LoadGame map='%s'\n", mapname );
 
 	// read the level time
 	trap_FS_Read( &i, sizeof( i ), f );
 	leveltime = i;
-	G_Printf( "SAVELOAD G_LoadGame leveltime=%i\n", leveltime );
 
 	// read the totalPlayTime
 	trap_FS_Read( &i, sizeof( i ), f );
@@ -1777,7 +1757,6 @@ void G_LoadGame( char *filename ) {
 	// read the entity structures
 	trap_FS_Read( &i, sizeof( i ), f );
 	size = i;
-	G_Printf( "SAVELOAD G_LoadGame entity struct size=%i native=%i legacy32=%i\n", size, (int)sizeof( gentity_t ), LEGACY32_GENTITY_SIZE );
 	last = 0;
 	while ( 1 )
 	{
@@ -1819,8 +1798,6 @@ void G_LoadGame( char *filename ) {
 	// read the client structures
 	trap_FS_Read( &i, sizeof( i ), f );
 	size = i;
-	G_Printf( "SAVELOAD G_LoadGame client struct size=%i native=%i legacy32=%i legacy32-old-weapons=%i\n",
-			  size, (int)sizeof( gclient_t ), LEGACY32_GCLIENT_SIZE, LEGACY32_GCLIENT_SIZE_OLD_WEAPONS );
 	while ( 1 )
 	{
 		trap_FS_Read( &i, sizeof( i ), f );
@@ -1842,7 +1819,6 @@ void G_LoadGame( char *filename ) {
 	// read the cast_state structures
 	trap_FS_Read( &i, sizeof( i ), f );
 	size = i;
-	G_Printf( "SAVELOAD G_LoadGame cast_state struct size=%i native=%i legacy32=%i\n", size, (int)sizeof( cast_state_t ), LEGACY32_CAST_STATE_SIZE );
 	while ( 1 )
 	{
 		trap_FS_Read( &i, sizeof( i ), f );
@@ -1898,7 +1874,6 @@ void G_LoadGame( char *filename ) {
 
 
 	trap_FS_FCloseFile( f );
-	G_Printf( "SAVELOAD G_LoadGame file restore complete legacy32=%i serverEntityUpdate=%i\n", loadingLegacy32Save, serverEntityUpdate );
 
 	// now increment the attempts field and update totalplaytime according to cvar
 	trap_Cvar_Update( &g_attempts );
@@ -1915,7 +1890,6 @@ void G_LoadGame( char *filename ) {
 		G_Printf( "Loaded legacy 32-bit savegame; upgrading current savegame to 64-bit format.\n" );
 		G_SaveGame( NULL );
 	}
-	G_Printf( "SAVELOAD G_LoadGame complete\n" );
 
 /*
 	// always save to the "current" savegame

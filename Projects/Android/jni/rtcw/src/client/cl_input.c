@@ -793,14 +793,21 @@ void CL_FinishMove( usercmd_t *cmd ) {
 #ifdef __ANDROID__
 	{
 		static float lastHmdYaw = 0.0f;
-		static int lastMoveLogTime = 0;
 		static qboolean haveHmd = qfalse;
-		float hmdYaw = vr.hmdorientation[YAW];
+		static qboolean wasWeaponScopeView = qfalse;
+		qboolean weaponScopeView = vr.scopeengaged && vr.backpackitemactive != 3 && !vr.binocularsActive;
+		float hmdYaw = weaponScopeView ? new_move.yaw : vr.hmdorientation[YAW];
 		float hmdDelta = 0.0f;
 		float turnDelta;
 		float moveMagnitude;
 
-		if ( haveHmd ) {
+		if ( weaponScopeView != wasWeaponScopeView ) {
+			haveHmd = qfalse;
+			old_move = new_move;
+			wasWeaponScopeView = weaponScopeView;
+		}
+
+		if ( haveHmd && !weaponScopeView ) {
 			hmdDelta = hmdYaw - lastHmdYaw;
 			while ( hmdDelta > 180.0f ) {
 				hmdDelta -= 360.0f;
@@ -829,7 +836,7 @@ void CL_FinishMove( usercmd_t *cmd ) {
 			cl.viewangles[YAW] += 360.0f;
 		}
 
-		cl.viewangles[PITCH] = vr.hmdorientation[PITCH] - SHORT2ANGLE( cl.snap.ps.delta_angles[PITCH] );
+		cl.viewangles[PITCH] = new_move.pitch - SHORT2ANGLE( cl.snap.ps.delta_angles[PITCH] );
 		cl.viewangles[ROLL] = 0.0f;
 		VectorCopy( cl.viewangles, vr.clientviewangles );
 		vr.clientview_hmd_yaw = hmdYaw;
@@ -848,14 +855,6 @@ void CL_FinishMove( usercmd_t *cmd ) {
 			cmd->buttons |= BUTTON_WALKING;
 		}
 
-		if ( cl.serverTime > lastMoveLogTime + 1000 ) {
-			lastMoveLogTime = cl.serverTime;
-			Com_Printf( "VR move probe: hmdYaw=%.2f hmdDelta=%.2f snapYaw=%.2f oldSnapYaw=%.2f turnDelta=%.2f viewYaw=%.2f fwd=%.2f side=%.2f posFwd=%.2f posSide=%.2f cmdF=%d cmdR=%d cmdU=%d\n",
-						hmdYaw, hmdDelta, new_move.yaw, old_move.yaw, turnDelta,
-						cl.viewangles[YAW], new_move.forward, new_move.side,
-						new_move.pos_forward, new_move.pos_side,
-						cmd->forwardmove, cmd->rightmove, cmd->upmove );
-		}
 	}
 #endif
 

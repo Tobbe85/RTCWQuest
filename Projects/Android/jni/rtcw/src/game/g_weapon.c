@@ -968,8 +968,6 @@ void Bullet_Fire( gentity_t *ent, float spread, int damage ) {
 
 	Bullet_Endpos( ent, spread, &end );
 
-	LOGI("Bullet_Fire %i %i %i",(int)end[0],(int)end[1],(int)end[2]);
-
 	if (!ent->aiCharacter) {
 
 	    qboolean right = gVR->right_handed;
@@ -1895,7 +1893,9 @@ void CalcMuzzlePoints( gentity_t *ent, int weapon ) {
 			phase = level.time / 1000.0 * ZOOM_YAW_FREQUENCY * M_PI * 2;
 			viewang[YAW] += ZOOM_YAW_AMPLITUDE * sin( phase ) * ( spreadfrac + ZOOM_YAW_MIN_AMPLITUDE );
 */
-		if (weapon == WP_AKIMBO || weapon == WP_AKIMBO_MP40 || weapon == WP_AKIMBO_THOMPSON) {
+		if ( gVR->scopeengaged && gVR->backpackitemactive != 3 && !gVR->binocularsActive ) {
+			VectorCopy( ent->client->ps.viewangles, viewang );
+		} else if (weapon == WP_AKIMBO || weapon == WP_AKIMBO_MP40 || weapon == WP_AKIMBO_THOMPSON) {
 			if (BG_AkimboFireSequence(weapon, ent->client->ps.ammoclip[weapon], ent->client->ps.ammoclip[weapAlts[weapon]], gVR->akimboTriggerState)) {
 				VectorCopy(gVR->offhandweaponangles, viewang);
 				viewang[YAW] = ent->client->ps.viewangles[YAW] + (gVR->offhandweaponangles[YAW] - gVR->hmdorientation[YAW]);

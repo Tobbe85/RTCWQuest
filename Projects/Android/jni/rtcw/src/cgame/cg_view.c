@@ -1236,12 +1236,16 @@ static int CG_CalcViewValues( void ) {
 
 	// position eye reletive to origin
 	if ( cgVR && !cgVR->screen && !cg.renderingThirdPerson ) {
+		qboolean weaponScopeView = cgVR->scopeengaged && cgVR->backpackitemactive != 3 && !cgVR->binocularsActive;
+		float currentViewYaw = weaponScopeView ? cgVR->scopedviewangles[YAW] : cgVR->hmdorientation[YAW];
 		float lateHmdYaw = cgVR->clientview_hmd_yaw_valid ?
-			AngleSubtract( cgVR->hmdorientation[YAW], cgVR->clientview_hmd_yaw ) : 0.0f;
+			AngleSubtract( currentViewYaw, cgVR->clientview_hmd_yaw ) : 0.0f;
 		// Gameplay/usercmd pitch still follows the ioEF delta_angles path. For
 		// rendering, use the live headset pitch/roll so RTCW's bob/zoom/camera
 		// pitch offsets do not fight the HMD pose.
-		cg.refdefViewAngles[PITCH] = cgVR->hmdorientation[PITCH];
+		cg.refdefViewAngles[PITCH] = weaponScopeView ?
+			cgVR->clientviewangles[PITCH] + SHORT2ANGLE( cg.snap->ps.delta_angles[PITCH] ) :
+			cgVR->hmdorientation[PITCH];
 		cg.refdefViewAngles[ROLL] = cgVR->hmdorientation[ROLL];
 		cg.refdefViewAngles[YAW] = cgVR->clientviewangles[YAW]
 			+ lateHmdYaw
@@ -1465,6 +1469,7 @@ Generates and draws a game scene and status information at the given time.
 */
 void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demoPlayback ) {
 	int inwater;
+	qboolean advanceClientFrame;
 
 	cg.cld = 0;         // NERVE - SMF - reset clientDamage
 
@@ -1475,6 +1480,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 
 	cg.time = serverTime;
 	cg.demoPlayback = demoPlayback;
+	advanceClientFrame = ( stereoView != STEREO_RIGHT );
 
 	// update cvars
 	CG_UpdateCvars();
@@ -1554,11 +1560,16 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 		return;
 	}
 
-	// this counter will be bumped for every valid scene we generate
-	cg.clientFrame++;
+	// Direct VR stereo renders the scene twice. Advance prediction and frame-owned
+	// client state once, then reuse that state for the right-eye draw.
+	if ( advanceClientFrame ) {
+		cg.clientFrame++;
+	}
 
 	// update cg.predictedPlayerState
-	CG_PredictPlayerState();
+	if ( advanceClientFrame ) {
+		CG_PredictPlayerState();
+	}
 
 	DEBUGTIME
 
@@ -1643,7 +1654,7 @@ void CG_DrawActiveFrame( int serverTime, stereoFrame_t stereoView, qboolean demo
 	CG_PowerupTimerSounds();
 
 	// make sure the lagometerSample and frame timing isn't done twice when in stereo
-	if ( stereoView != STEREO_RIGHT ) {
+	if ( advanceClientFrame ) {
 		cg.frametime = cg.time - cg.oldTime;
 		if ( cg.frametime < 0 ) {
 			cg.frametime = 0;

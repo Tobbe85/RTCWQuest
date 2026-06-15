@@ -89,27 +89,26 @@ void acquireTrackedRemotesData(double displayTime) {
 //YAW:  Left increase, Right decrease
 void updateScopeAngles()
 {
-    //Bit of a hack, but use weapon orientation / position for view when scope is engaged
-    static vec3_t currentScopeAngles;
-    static vec3_t lastScopeAngles;
+    vec3_t currentScopeAngles;
     if (vr.scopeengaged)
     {
         //Clear weapon offset
         VectorSet(vr.calculated_weaponoffset, 0, 0, 0);
 
-        VectorSet(currentScopeAngles, vr.weaponangles[PITCH], vr.weaponangles[YAW], vr.hmdorientation[ROLL]);
+        VectorSet(currentScopeAngles, vr.weaponangles[PITCH],
+                  snapTurn + vr.hmdorientation_first[YAW] +
+                  (vr.weaponangles[YAW] - vr.weaponangles_first[YAW]),
+                  vr.hmdorientation[ROLL]);
 
-        //Set "view" Angles
-        VectorCopy(currentScopeAngles, vr.hmdorientation);
-
-        //Orientation
-        VectorSubtract(lastScopeAngles, currentScopeAngles, vr.hmdorientation_delta);
-
-        //Keep this for our records
-        VectorCopy(currentScopeAngles, lastScopeAngles);
+        while (currentScopeAngles[YAW] > 180.0f) {
+            currentScopeAngles[YAW] -= 360.0f;
+        }
+        while (currentScopeAngles[YAW] < -180.0f) {
+            currentScopeAngles[YAW] += 360.0f;
+        }
+        VectorCopy(currentScopeAngles, vr.scopedviewangles);
     } else {
-        VectorSet(currentScopeAngles, vr.weaponangles[PITCH], vr.weaponangles[YAW], vr.hmdorientation[ROLL]);
-        VectorCopy(currentScopeAngles, lastScopeAngles);
+        VectorCopy(vr.hmdorientation, vr.scopedviewangles);
     }
 }
 
