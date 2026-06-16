@@ -3618,8 +3618,8 @@ void CG_LaserSight(const playerState_t *ps, qboolean akimbo) {
                 memset(&ent, 0, sizeof(ent));
 
                 ent.reType = RT_SPRITE;
-                ent.radius = 3.0f;
-                ent.customShader = cgs.media.sparkFlareShader;
+                ent.radius = 1.5f;
+                ent.customShader = cgs.media.laserDotShader;
 
                 VectorMA(trace.endpos, 1.5f, trace.plane.normal, ent.origin);
 
