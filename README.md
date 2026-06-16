@@ -1,175 +1,401 @@
 ![RTCW Banner](https://github.com/DrBeef/RTCWQuest/blob/master/assets/banner.jpg)
-====
 
-RTCWQuest
-==========
+# RTCWQuest
 
-Welcome to the one and only fully wireless 6DoF implementation of the _Return to Castle Wolfenstein_ single player campaign in VR.
+RTCWQuest is a standalone Android VR port of the _Return to Castle Wolfenstein_
+single-player campaign. The current development branch has been migrated away
+from the original Oculus Mobile SDK / VrApi backend and now uses OpenXR with an
+arm64-only Android build.
 
-This is built solely for the Oculus Quest VR HMD and will *not* run on any other device.
+This repository contains the engine, Android wrapper, VR integration, and the
+project's VR assets. It does not contain the full commercial RTCW game data.
 
-The easiest way to install this on your Quest is using SideQuest, a Desktop app designed to simplify sideloading apps and games ( even beat saber songs on quest ) on Standalone Android Headsets like Oculus Quest and Oculus Go. It supports drag and drop for installing APK files!
+## Current Platform Status
 
-Download SideQuest here:
-https://github.com/the-expanse/SideQuest/releases
+The current Android build is:
 
+- OpenXR based, using the Khronos Android OpenXR loader.
+- arm64-v8a only.
+- Built with Android Gradle Plugin 8.2.1 and NDK 25.1.8937393.
+- Targeted at Android API 32 with a minimum API level of 29.
+- Intended for standalone Android OpenXR headsets, including Meta Quest and Pico.
+- Still using the RTCW/id Tech 3 engine structure, including native game modules
+  for `qagame`, `cgame`, and `ui`.
 
+The old VrApi/Oculus Mobile SDK build path is deprecated and should not be used
+for this branch.
 
-IMPORTANT NOTE
---------------
+## Repository Layout
 
-This is just an engine port; though the apk does contain the DEMO version of RTCW, not the full game. If you wish to play the full game you must purchase it yourself, steam is most straightforward:  [STEAM LINK]
+Important directories:
 
+- `Projects/Android` - Android Gradle project.
+- `Projects/Android/build.gradle` - main Android build configuration.
+- `Projects/Android/AndroidManifest.xml` - app manifest, OpenXR permissions,
+  headset launch categories, and runtime metadata.
+- `Projects/Android/jni` - native Android/NDK build root.
+- `Projects/Android/jni/RTCWVR` - VR layer, OpenXR backend, input, frame setup,
+  and Android surface integration.
+- `Projects/Android/jni/rtcw` - RTCW engine, game, cgame, ui, renderer, and
+  Android native build files.
+- `Projects/Android/jni/SupportLibs/gl4es` - gl4es support library.
+- `Projects/Android/z_vr_assets` - VR asset source folder packed into
+  `assets/z_vr_assets.pk3` during Gradle builds.
+- `java/com/drbeef/rtcwquest` - Java activity and native library bootstrap.
+- `assets` - packaged APK assets.
+- `res` - Android resources.
 
-Copying the Full Game PAK files to your Oculus Quest
-----------------------------------------------------
+## Required Tools
 
-Copy the PAK files from the installed RTCW game folder on your PC to the /RTCWQuest/Main folder on your Oculus Quest when it is connected to the PC. You have to have run RTCWQuest at least once for the folder to be created and if you don't see it when you connect your Quest to the PC you might have to restart the Quest.
+Install:
 
+- Android Studio or command-line Android SDK tools.
+- Android SDK Platform 32.
+- Android NDK `25.1.8937393`.
+- Java runtime compatible with Android Gradle Plugin 8.2.1.
+- ADB for installing and launching on a headset.
 
-Caveats
--------
+The Gradle wrapper is included in `Projects/Android`, so a separate Gradle
+installation is not required.
 
-WARNING:  There is a good chance that unless you have your VR-legs this will probably make you feel a bit sick. The moment you start to feel under the weather YOU MUST STOP PLAYING for a good period of time before you try again. I will not be held responsible for anyone making themselves ill.
+## Android SDK Configuration
 
-Configuration
--------------
+Create or update:
 
-There are plenty of options available in the controls configuration menu. Be sure to check them out.
+```text
+Projects/Android/local.properties
+```
 
-*Smooth Turning*
+Example:
 
-To enable smooth turning, simply set the snap turn value to very low, try a few values out to find one that suits you.
+```properties
+sdk.dir=C\:\\Users\\yourname\\AppData\\Local\\Android\\Sdk
+ndk.dir=C\:\\Users\\yourname\\AppData\\Local\\Android\\Sdk\\ndk\\25.1.8937393
+```
 
-*Teleport*
+Use paths that match your machine. Do not commit personal SDK paths.
 
-Once teleport has been enabled in the config menu, you can press the off-hand trigger to activate the teleport, aim with the offhand controller to the desired location and release the trigger to teleport, normal locomotion is still available too, though if you wish to turn that off then you can reduce the movement speed to zero in the configuration menu.
-**NOTE: There is nothing to stop you cheating with the teleport**
+## Building
 
-*Laser Sight*
+From the repository root:
 
-If you really want to, you can enable a laser sight in the controls menu.
+```powershell
+cd Projects\Android
+.\gradlew.bat assembleDebug
+```
 
-*Height Adjust*
+The debug APK is written to:
 
-Player height can be adjusted for those that wish to play seated.
+```text
+Projects/Android/build/outputs/apk/debug/rtcwquest-debug.apk
+```
 
+For a release build:
 
-Controls
-========
+```powershell
+cd Projects\Android
+.\gradlew.bat assembleRelease
+```
 
-![RTCW Controller Diagram](https://github.com/DrBeef/RTCWQuest/blob/master/assets/Controller_diagram_alt.jpg)
+The release APK is written to:
 
-Note: the controls should be reversed for left handed players
+```text
+Projects/Android/build/outputs/apk/release/rtcwquest-release.apk
+```
 
-* Open the in-game menu with the left-controller menu button (same irrespective of right/left handed control)
-* A Button - Crouch
-* B Button - Jump
-* Y Button - Bring up the notebook
-* X Button - Show / Hide the HUD
-* Right-Hand Controller - Weapon orientation
-* Right-Hand Thumbstick - left/right Snap or Smooth turn, up/down weapon change
-* Right-Hand Thumbstick click - "activate" button (open doors, pull levers, pickup chairs etc)
-* Right-Hand Trigger - Fire
-* Right Grip Button - short click = reload, long press and trigger to switch weapon to alt-fire (more on this shortly)
-* Left-Hand Controller - Direction of movement (or HMD direction if configured)
-* Left-Hand Thumbstick - locomotion
-* Left-Hand Trigger - Run / Teleport
-* Left-Hand Grip Button - Two handed Weapon Stabilisation - will increase accuracy of weapons
-* Left-Hand Thumbstick click - Kick
+The default debug and release signing configs use
+`Projects/Android/android.debug.keystore` unless Gradle properties are supplied:
 
+```properties
+key.store=...
+key.store.password=...
+key.alias=...
+key.alias.password=...
+```
 
-Alt-Fire
---------
+## Installing On A Headset
 
-Press and hold the grip button then pull the trigger to select the alternative weapon mode.
+Connect the headset with developer mode enabled, then run:
 
+```powershell
+adb devices
+adb install -r -d Projects\Android\build\outputs\apk\debug\rtcwquest-debug.apk
+```
 
-Weapon Specific Controls
-========================
+Launch from the headset UI, or from ADB:
 
-Sniper Scopes
--------------
+```powershell
+adb shell monkey -p com.drbeef.rtcwquest -c android.intent.category.LAUNCHER 1
+```
 
-The FG42 and the Mauser can have their scopes toggled on and off by using the weapon alt mode (note the scoped Mauser is only available once the scope has been picked up in the game). When the scope is attached, to trigger the scoped view, ensure you are holding the weapon in two hands (use off-hand grip button) and then look through the scope on the weapon, this will switch you to scope mode:
+For clean testing:
 
-* Move the controllers like you would when looking through the scope to aim by moving the weapon
-* Use the dominant thumb stick forward / back to zoom in / out
-* When using the scope you will move at 1/3 normal speed
-* Thumbstick Turning is disabled when the scope is active
-* Release the off hand grip or move the dominant controller away from your face to exit scoped mode
+```powershell
+adb shell am force-stop com.drbeef.rtcwquest
+adb logcat -c
+adb shell monkey -p com.drbeef.rtcwquest -c android.intent.category.LAUNCHER 1
+```
 
+Useful logcat filters:
 
-Knife
------
+```powershell
+adb logcat RTCWVR:* OpenXR:* AndroidRuntime:* libc:* *:S
+```
 
-There is no fire button, simply stab with it or swing it to use it like a knife.
+## Game Data
 
+This is an engine port. The full commercial game data is not included.
 
-Grenades / Pineapples / Dynamite
---------------------------------
+To play the full game, install RTCW on a PC and copy the relevant `.pk3` files
+from the installed RTCW game folder to the headset's RTCWQuest data directory.
+The app creates its folders after the first launch.
 
-These are all throwable. Hold the trigger and then throw the item, releasing the trigger at the apex of the throw.
+Typical headset path:
 
+```text
+/sdcard/RTCWQuest/Main
+```
 
-Mounted Guns (MG42)
--------------------
+If the folder does not appear immediately over USB/MTP, launch the app once and
+restart or reconnect the headset.
 
-Mounted guns are aimed using gaze direction, pull trigger to fire, press "activate" to enter/exit mounted gun mode.
+## OpenXR Migration Notes
 
+The original RTCWQuest build was Quest-only and used Oculus VrApi. This branch
+uses OpenXR instead.
 
+Key points:
 
-Backpack
---------
+- Java loads `openxr_loader` before `rtcw_client`.
+- Gradle depends on:
 
-There is a handy backpack feature which acts as a quick access to certain weapons/pickups. To access the backpack move the controller out of sight over your shoulder. 
-Press and hold one of the following buttons to access the associated items:
+```groovy
+org.khronos.openxr:openxr_loader_for_android:1.1.60
+```
 
-*Dominant Hand Controller*
+- The build extracts the loader AAR's arm64 shared library into generated
+  `jniLibs`:
 
-* A (or X for left handed) - Knife (useful to quickly smash up stuff or stab)
-* B (or Y for left handed) - Binoculars (once you have picked them up in game), raise them to your face to look through them, pull trigger to zoom in/out
-* Grip button - Grenades / Dynamite - You can then throw them in the usual manner using the trigger
+```text
+Projects/Android/build/generated/openxr-loader/jniLibs/arm64-v8a/libopenxr_loader.so
+```
 
-Release the button to return to the previously active weapon
+- `Projects/Android/jni/Android.mk` imports that generated
+  `libopenxr_loader.so` as a prebuilt shared library.
+- The native client links against `openxr_loader` and `gl4es`.
+- The manifest declares OpenXR permissions, runtime broker queries, and
+  immersive headset launch categories.
+- OpenXR runtime selection is handled by the platform runtime broker on the
+  headset.
 
-*Off Hand Controller*
+The native OpenXR code lives primarily in:
 
-* X (or A for left handed) - Quick Save Game
-* Y (or B for left handed) - Load Last Quick Save
+- `Projects/Android/jni/RTCWVR/TBXR_Common.c`
+- `Projects/Android/jni/RTCWVR/TBXR_Common.h`
+- `Projects/Android/jni/RTCWVR/OpenXrInput.c`
+- `Projects/Android/jni/RTCWVR/RTCWVR_SurfaceView.c`
 
+The OpenXR backend initializes the Android OpenXR loader, creates the instance
+and session, uses OpenGL ES swapchains, and drives the frame lifecycle used by
+the existing RTCW VR hooks.
 
-Things to note / FAQs:
-----------------------
+## 64-bit Migration Notes
 
-* Mods and Texture packs that work:...
+This branch is arm64-only. The build intentionally does not produce
+`armeabi-v7a` output.
 
+Relevant build settings:
 
-Credits:
---------
+- `Projects/Android/build.gradle`
+  - `abiFilters 'arm64-v8a'`
+  - `minSdkVersion 29`
+  - `targetSdkVersion 32`
+  - `compileSdkVersion 32`
+  - `ndkVersion '25.1.8937393'`
+- `Projects/Android/jni/Application.mk`
+  - `APP_ABI := arm64-v8a`
+  - `APP_MODULES := gl4es qagame ui cgame rtcw_client`
 
-I would like to thank the following teams and individual for making this possible:
+The native game modules are built as normal shared libraries:
 
+- `libqagame.so`
+- `libcgame.so`
+- `libui.so`
+- `librtcw_client.so`
+- `libgl4es.so`
+- `libopenxr_loader.so`
 
-* Emile Belanger - For once again providing the android port upon which this is based. See his other Android ports [here](http://www.beloko.com/)
-* Baggyg - My long-time VR friend whose roles in this have been varied and all helpful, also the creator of excellent websites/artwork/assets for this mod as well as various  model alterations to be more VR friendly (removing hands, tweaking iron sights, alignment etc)
-* VR_Bummser - PR person extraordinaire, play tester and all round helpful and good guy. Hoping I can buy him a beer in person one day!
-* The [SideQuest](https://sidequestvr.com/#/news) team - For making it easy for people to install this
-* Dark Matter Productions and William Faure - for allowing us to include their excellent remastered weapons with the install. Check out their work here
-* _HellBaron_ - for allowing us to provide a custom version of his excellent Venom Mod for RTCW
-* Johannes Tripolt (Eigenlaut) - For additional fixes and enhancements to weapons
-* [ptitSeb](https://github.com/ptitSeb/gl4es) for GLE4ES for the OpenGL -> OpenGLES2 translation: without which this project wouldn't have worked at all
+The 64-bit conversion requires care around the VM/native DLL boundary. In this
+codebase, pointer-sized values crossing module boundaries must use pointer-sized
+types such as `intptr_t`; do not reintroduce assumptions that pointers fit in
+`int`. QVM bytecode and interpreted VM storage remain 32-bit where the original
+engine format requires it.
 
+When touching VM, syscall, or module-loading code, check for:
 
-Building:
----------
+- Pointer-to-`int` casts.
+- Function pointer casts through integer types.
+- Syscall argument arrays using `int *` where native code needs `intptr_t *`.
+- `VM_Call`, `vmMain`, and `dllEntry` signatures.
+- Savegame compatibility code that reads historical 32-bit structures.
 
-You need the following:
+## Runtime Data And Saves
 
-* Android Developer Studio
-* Latest Android Native Development Kit
-* Oculus Mobile SDK 1.30.0
-* The RTCWQuest folder cloned from GitHub should be below VrSamples in the extracted SDK
-* Create a local.properties file in the root of the extracted Oculus Mobile SDK that contains the ndk.dir and sdk.dir properties for where your SDK/NDK are located (see Gradle documentation regarding this)
-* To build debug you will need a _android.debug.keystore_ file placed in the following folder:
-_oculus_sdk_dir_/VrSamples/RTCWQuest/Projects/Android
+The app uses the RTCWQuest external data folder for user data and game data.
+Existing 32-bit-era saves may need compatibility handling because native struct
+sizes and pointer-sized fields changed in the arm64 build. The project contains
+compatibility work for older save data, but any further savegame changes should
+be tested against both newly-created arm64 saves and old user saves.
+
+Recommended save testing:
+
+- Start a new game, save, quit, relaunch, and load.
+- Quick save and quick load.
+- Load a legacy 32-bit save.
+- Transition levels after loading.
+- Verify cgame, game, and UI modules agree on struct sizes.
+
+## VR Rendering Notes
+
+The renderer still uses the RTCW/id Tech 3 rendering flow with gl4es and an
+OpenGL ES backend. OpenXR owns headset frame timing and swapchain presentation.
+
+Important behavior:
+
+- Immersive gameplay is rendered stereo.
+- Menus, loading, console, and non-immersive states use a virtual screen path.
+- Gameplay HUD is drawn through the normal cgame 2D draw path rather than as an
+  OpenXR compositor overlay.
+- Scope and binocular FOV handling must keep the game/culling FOV and submitted
+  OpenXR projection FOV in sync.
+
+When changing FOV, culling, cinematic cameras, sky rendering, or HUD projection,
+test all of these:
+
+- Normal gameplay.
+- Cinematic cutscenes.
+- Loading screens.
+- Console/menu virtual screen.
+- Binocular zoom.
+- Scoped weapons.
+- Head pitch/yaw/roll.
+- Skybox behavior.
+
+## Input Notes
+
+OpenXR actions are translated into the existing RTCWQuest VR input state and
+then into engine commands. The goal is to preserve legacy RTCWQuest controls
+while using OpenXR-backed controller poses and buttons.
+
+Important gameplay behaviors to preserve:
+
+- Dominant-hand weapon aiming.
+- Left-handed mode.
+- Snap and smooth turn.
+- Weapon stabilization / virtual stock.
+- Scope engagement.
+- Binoculars.
+- Backpack weapon selection.
+- Grenade throwing.
+- Mounted guns.
+- Teleport.
+- External haptics service events plus OpenXR controller haptics.
+
+## Packaged APK Contents
+
+A successful APK should include only `arm64-v8a` native libraries. Useful check:
+
+```powershell
+cd Projects\Android
+.\gradlew.bat assembleDebug
+jar tf build\outputs\apk\debug\rtcwquest-debug.apk | findstr /i "lib/.*\\.so"
+```
+
+Expected native libraries include:
+
+- `lib/arm64-v8a/librtcw_client.so`
+- `lib/arm64-v8a/libqagame.so`
+- `lib/arm64-v8a/libcgame.so`
+- `lib/arm64-v8a/libui.so`
+- `lib/arm64-v8a/libgl4es.so`
+- `lib/arm64-v8a/libopenxr_loader.so`
+
+There should be no `armeabi-v7a` libraries in the APK.
+
+## Troubleshooting
+
+### Gradle cannot find the SDK or NDK
+
+Check `Projects/Android/local.properties`. Make sure `sdk.dir` and `ndk.dir`
+point to installed SDK/NDK folders.
+
+### OpenXR runtime fails to initialize
+
+Check that the headset has an OpenXR runtime installed and enabled. Pull logs:
+
+```powershell
+adb logcat RTCWVR:* OpenXR:* AndroidRuntime:* libc:* *:S
+```
+
+Verify `libopenxr_loader.so` is present in the APK and that Java is loading it
+before `rtcw_client`.
+
+### APK launches flat or exits immediately
+
+Check:
+
+- Manifest OpenXR permissions and categories.
+- Runtime broker availability on the headset.
+- `adb logcat` for OpenXR initialization errors.
+- That the build contains only arm64 libraries on an arm64 headset.
+
+### Missing game data
+
+Launch once to create `/sdcard/RTCWQuest/Main`, then copy the full RTCW `.pk3`
+files into that folder.
+
+### Save load fails
+
+Check whether the save was produced by the older 32-bit build or the current
+arm64 build. Legacy saves may require compatibility conversion. Use logcat to
+inspect reported struct sizes and savegame version checks.
+
+## Development Guidance
+
+For future work:
+
+- Do not reintroduce Oculus VrApi or Oculus Mobile SDK dependencies.
+- Keep the Android build arm64-only unless there is a deliberate reason to add
+  another ABI.
+- Keep OpenXR loader packaging through the Khronos AAR unless the project makes
+  a deliberate loader strategy change.
+- Be careful around VM/native boundary types.
+- Avoid pointer truncation in savegame, syscall, and VM code.
+- Test visual changes in both immersive stereo and virtual screen modes.
+- Test on both Meta Quest and Pico when changing OpenXR runtime, manifest, or
+  input behavior.
+
+## Credits
+
+RTCWQuest builds on a long chain of work from id Software, the original RTCW
+GPL source release, Team Beef VR ports, Beloko Android porting work, gl4es, and
+many project contributors.
+
+Special thanks from the original project:
+
+- Emile Belanger for the Android port base.
+- Baggyg for VR support, assets, artwork, testing, and model work.
+- VR_Bummser for testing and community support.
+- The SideQuest team for sideloading support.
+- Dark Matter Productions and William Faure for remastered weapon work.
+- HellBaron for the Venom Mod basis.
+- Johannes Tripolt (Eigenlaut) for weapon fixes and enhancements.
+- ptitSeb for gl4es.
+
+## License And Game Data
+
+This repository is an engine/port project. RTCW game assets are owned by their
+respective rights holders and are not included as full commercial game content.
+
+The OpenXR migration removes the previous dependency on the deprecated Oculus
+VrApi SDK path, making the VR backend friendlier to GPL distribution concerns.
