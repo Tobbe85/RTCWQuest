@@ -3612,7 +3612,7 @@ void CG_LaserSight(const playerState_t *ps, qboolean akimbo) {
 			VectorMA(origin, 8192, forward, endForward);
 			trap_CM_BoxTrace(&trace, origin, endForward, NULL, NULL, 0, MASK_SOLID);
 
-            if (trap_Cvar_VariableIntegerValue("vr_laserdot") != 0) {
+            if (trap_Cvar_VariableIntegerValue("vr_lasersight") == 2) {
 
                 refEntity_t ent;
                 memset(&ent, 0, sizeof(ent));

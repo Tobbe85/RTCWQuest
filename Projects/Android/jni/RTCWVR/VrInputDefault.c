@@ -90,30 +90,6 @@ void HandleInput_Default( ovrInputStateGamepad *pFootTrackingNew, ovrInputStateG
         secondaryButton2 = offButton2;
     }
 
-    static qboolean laserDotTogglePressed = qfalse;
-
-    qboolean buttoncombo =
-            (primaryButtonsNew & ovrButton_Joystick) &&
-            (primaryButtonsNew & ovrButton_GripTrigger);
-
-    if (buttoncombo && !laserDotTogglePressed)
-    {
-        Cvar_SetValue("vr_laserdot",
-                      vr_laserdot->value > 0 ? 0 : 1);
-
-        laserDotTogglePressed = qtrue;
-
-        if (vr_control_scheme->value < 10) {
-            RTCWVR_Vibrate(80, 1, 0.8f);
-        } else {
-            RTCWVR_Vibrate(80, 0, 0.8f);
-        }
-    }
-    else if (!buttoncombo)
-    {
-        laserDotTogglePressed = qfalse;
-    }
-
     {
         //Set gun angles - We need to calculate all those we might need (including adjustments) for the client to then take its pick
         vec3_t rotation = {0};
